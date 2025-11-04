@@ -1,0 +1,1 @@
+Implementation of mean flows for a replication study and extension of "Mean Flows for One-step Generative Modeling" (Geng et al., 2025), for the final project in the course DD2610 Deep Learning, Advanced Course at KTH
