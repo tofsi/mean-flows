@@ -102,6 +102,7 @@ def algorithm_2(fn, dim, key):
     """
     e = p_0(key, dim)
     x = e - fn(e, 0, 1)
+    return x
 
 
 # TODO: Test these functions on a simple model fn and a simple data set.
