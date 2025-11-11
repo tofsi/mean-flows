@@ -1,4 +1,4 @@
-## Standard libraries
+# --- imports (same as yours) ---
 import os
 import json
 import math
@@ -7,102 +7,105 @@ from scipy import spatial
 
 import jax
 import jax.numpy as jnp
-import flax
-from flax import nnx
 from jax import random
+from flax import nnx
 
-
-T = jnp.float64  # Maybe?
-
-# TODO: Implement mean flow method in a way that can modularly take a network which
-# parametrizes the mean flow field and provide the necessary resources for training.
-
-
-# TODO: Implement algorithm 1
-def sample_t_r(key, T):
-    # Returns two times from U[0, 1] in ascending order
-    return tuple(random.uniform(key, 2, T).sort(axis=0))
-
-
-def p_0(key, dim, T):
-    # Simple prior from which we sample in algorithm 1
-    # The following is an example, IDK what they used I'll have to check
-    return random.multivariate_normal(key, 0, jnp.identity(dim), dtype=T)
+T = jnp.float32  # global dtype
 
 
 def metric(error):
-    # Square loss, equation (9) in the paper
+    # Square loss, equation (9)
     return jnp.sum(jnp.square(error))
+
+
+# ===== Batched helpers =====
+
+
+def sample_t_r(key, batch_size, dtype=T):
+    """Return per-sample r < t, shapes: r (B,), t (B,)."""
+    u = random.uniform(key, shape=(batch_size, 2), dtype=dtype, minval=0.0, maxval=1.0)
+    u_sorted = jnp.sort(u, axis=1)
+    r = u_sorted[:, 0]
+    t = u_sorted[:, 1]
+    return r, t
+
+
+def p_0(key, batch_size, dim, dtype=T):
+    """Batch N(0, I). Shape: (B, dim)."""
+    # Equivalent to multivariate_normal with mean=0, cov=I, but faster for batches
+    return random.normal(key, shape=(batch_size, dim), dtype=dtype)
+
+
+# ---- Algorithm 1 (training) ----
+# fn is a Python callable; mark it static so JIT doesn't try to trace it as data.
+
+# ===== Batched Algorithm 1: returns mean loss and per-sample losses =====
 
 
 def algorithm_1(fn, x, key):
     """
-    Implementation of algorithm 1 from the paper
-    Used for training a MeanFlow model
-
-    ## Arguments:
-    fn : function
-        Parametrized average velocity field u.
-        The signature is fn(z, r, t) where
-        z = position at t on conditional path
-        r = earlier time
-        t = later time
-        Needs to be autodiffable with jax.jvp!
-    x : vector with only one axis!
-        Sampled example from our training data
-        NOTE: 1d vector only for now, idk final shape or type of x
-        TODO: Figure out how to represent x
-    key : PRNG? key used for sampling using jax.random
-
-    ## Returns:
-    tuple
-        error : some kind of vector
-            for weight updates of parametrized field fn
-            TODO: I think? the error gives the weight update for the square loss (9) in the paper. Is this true?
-        loss : float
+    Batched Algorithm 1 loss.
+    Args:
+      fn: callable, fn(z, r, t) -> u(z, r, t), accepts batched (B,*) and returns (B, D)
+      x : (B, D) batch of data points
+      key: PRNGKey
+    Returns:
+      mean_loss: scalar
     """
+    B, D = x.shape
+    k_rt, k_e = random.split(key, 2)
 
-    r, t = sample_t_r(
-        key, T
-    )  # I think always r < t so we are parametrizing mean flow from r to t
-    e = p_0(key, x.shape[0], T)  # here we assume that x is a vector!
-    z = (1 - t) * x + t * e  # Point on conditional path at time t
-    v = e - x  # difference vector from starting point e to endpoint x of the path
-    u, dudt = jax.jvp(fn, (z, r, t), (v, 0, 1))
-    u_tgt = v - (t - r) * dudt
-    error = u - jax.lax.stop_gradient(u_tgt)
-    loss = metric(error)
+    # Sample r,t,e for the entire batch
+    r, t = sample_t_r(k_rt, B, dtype=T)  # (B,), (B,)
+    e = p_0(k_e, B, D, dtype=T)  # (B, D)
 
-    return (error, loss)
+    # Conditional path and direction
+    z = (1.0 - t)[:, None] * x + t[:, None] * e  # (B, D)
+    v = e - x  # (B, D)
+
+    # JVP wrt t for the whole batch in one go:
+    # primals: (z, r, t), tangents: (0, 0, 1)
+    zeros_z = jnp.zeros_like(z)
+    zeros_r = jnp.zeros_like(r)
+    ones_t = jnp.ones_like(t)
+
+    u, dudt = jax.jvp(fn, (z, r, t), (zeros_z, zeros_r, ones_t))  # each (B, D)
+
+    # Target and error
+    u_tgt = v - (t - r)[:, None] * dudt  # (B, D)
+    error = u - jax.lax.stop_gradient(u_tgt)  # (B, D)
+
+    # Loss per sample then mean
+    losses = jnp.sum(error * error, axis=1)  # (B,)
+    mean_loss = jnp.mean(losses)  # scalar
+    return mean_loss
 
 
-# TODO: Implement algorithm 2
+# JIT with fn static by position 0 (broad compatibility)
+algorithm_1_jit = jax.jit(algorithm_1, static_argnums=0)
+# ===== Batched Algorithm 2 (sampling) =====
 
 
-def algorithm_2(fn, dim, key):
+def algorithm_2(fn, dim, key, batch_size):
     """
-    Implementation of algorithm 2 from the paper
-    1-step sampling of MeanFlow model
-
-    ## Arguments:
-    fn : function
-        Parametrized average velocity field u.
-        The signature is fn(z, r, t) where
-        z = position at t on conditional path
-        r = earlier time
-        t = later time
-        Needs to be autodiffable with jax.jvp!
-    dim : int
-        dimension of generated example
-        #TODO: Figure out the representation of this, may not always be vector shape
-    key : PRNG? key used for sampling using jax.random
-
-    ## Returns:
-    x : Generated sample
+    One-step sampling for a minibatch.
+    Args:
+      fn: callable, fn(z, r, t) -> u(z, r, t), batched
+      dim: data dimension (e.g., 2)
+      key: PRNGKey
+      batch_size: number of samples to generate
+    Returns:
+      x: (B, dim)
     """
-    e = p_0(key, dim)
-    x = e - fn(e, 0, 1)
+    e = p_0(key, batch_size, dim, dtype=T)  # (B, dim)
+
+    # r,t can be scalars or (B,)—your MLP broadcasts fine. Use scalars for simplicity:
+    r = jnp.array(0.0, dtype=T)
+    t = jnp.array(1.0, dtype=T)
+
+    u = fn(e, r, t)  # (B, dim)  <-- batched call
+    x = e - u
     return x
 
 
-# TODO: Test these functions on a simple model fn and a simple data set.
+algorithm_2_jit = jax.jit(algorithm_2, static_argnums=(0, 1, 3))
