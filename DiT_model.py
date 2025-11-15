@@ -226,7 +226,7 @@ class DiT(nn.Module):
     cond = r_emb + t_emb + y_emb  # (B, D)
     # Transformer blocks with adaLN-Zero conditioning
     for _ in range(self.depth):
-        bloock = DiTBlock(self.hidden_dim, self.num_heads)
+        block = DiTBlock(self.hidden_dim, self.num_heads)
         x = block(x_emb, cond)
     # Final layer
     x = FinalLayer(self.hidden_dim, self.patch_size, self.out_channels)(x, cond)  # (B, N, patch_size*patch_size*C)
