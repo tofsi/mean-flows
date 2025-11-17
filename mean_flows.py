@@ -4,6 +4,7 @@ import json
 import math
 import numpy as np
 from scipy import spatial
+from typing import Optional, Tuple
 
 import jax
 import jax.numpy as jnp
@@ -21,13 +22,49 @@ def metric(error):
 # ===== Batched helpers =====
 
 
-def sample_t_r(key, batch_size, dtype=T):
+def sample_t_r(
+    key,
+    batch_size,
+    ratio_of_sampling,
+    distribution: str,
+    sampler_args: Optional[Tuple[float, float]],
+    dtype=T,
+):
     """Return per-sample r < t, shapes: r (B,), t (B,)."""
-    u = random.uniform(key, shape=(batch_size, 2), dtype=dtype, minval=0.0, maxval=1.0)
+    t, r = dtype(0.0), dtype(0.0)
+    u = None
+    key_sampler, key_ratio_of_sampling = random.split(key)
+    if distribution == "uniform":
+        # Uniform sampler
+        u = random.uniform(
+            key_sampler, shape=(batch_size, 2), dtype=dtype, minval=0.0, maxval=1.0
+        )
+    elif distribution == "lognorm":
+        # Logit normal sampler
+        # First samples from N(a, b) and then applies sigmoid to get between 0 and 1
+        u = jax.nn.sigmoid(
+            sampler_args[0]
+            + sampler_args[1]
+            * random.normal(key_sampler, shape=(batch_size, 2), dtype=dtype)
+        )
+    else:
+        raise TypeError("Unsupported sampler argument type")
+    # Swap order if necessary to enforce r < t
     u_sorted = jnp.sort(u, axis=1)
-    r = u_sorted[:, 0]
+    # Enforce ratio of sampling constraint
+    t_not_equal_r_mask = random.bernoulli(
+        key_ratio_of_sampling, ratio_of_sampling, (batch_size)
+    )
     t = u_sorted[:, 1]
-    return r, t
+    r = t_not_equal_r_mask * u_sorted[:, 0] + (~t_not_equal_r_mask) * t
+    return t, r
+
+
+sample_t_r_jit = jax.jit(
+    sample_t_r,
+    static_argnums=(1, 2, 3, 4, 5),  # batch_size, sampler_kind, dtype
+    # sampler_params can be dynamic; or add 4 here if you want them static too
+)
 
 
 def p_0(key, batch_size, dim, dtype=T):
@@ -42,13 +79,25 @@ def p_0(key, batch_size, dim, dtype=T):
 # ===== Batched Algorithm 1: returns mean loss and per-sample losses =====
 
 
-def algorithm_1(fn, x, key):
+def algorithm_1(
+    fn,
+    params,
+    x,
+    key,
+    ratio_of_sampling,
+    distribution: str,
+    sampler_args: Optional[Tuple[float, float]],
+):
     """
     Batched Algorithm 1 loss.
     Args:
-      fn: callable, fn(z, r, t) -> u(z, r, t), accepts batched (B,*) and returns (B, D)
+      fn: callable, fn(params, z, r, t) -> u(params, z, r, t), accepts batched (B,*) and returns (B, D)
+      params: Parameters of the parametrized function fn for the field
       x : (B, D) batch of data points
       key: PRNGKey
+      ratio_of_sampling: float between 0 and 1, proportion of samples where r!=t
+      distribution: str, either "uniform" or "lognorm". For the t, r sampling scheme.
+      sampler_args: If None, uniform(0, 1) sampling. Elseif (a, b), logit-normal(a, b)
     Returns:
       mean_loss: scalar
     """
@@ -56,7 +105,9 @@ def algorithm_1(fn, x, key):
     k_rt, k_e = random.split(key, 2)
 
     # Sample r,t,e for the entire batch
-    r, t = sample_t_r(k_rt, B, dtype=T)  # (B,), (B,)
+    t, r = sample_t_r_jit(
+        k_rt, B, ratio_of_sampling, distribution, sampler_args, dtype=T
+    )  # (B,), (B,)
     e = p_0(k_e, B, D, dtype=T)  # (B, D)
 
     # Conditional path and direction
@@ -69,7 +120,12 @@ def algorithm_1(fn, x, key):
     zeros_r = jnp.zeros_like(r)
     ones_t = jnp.ones_like(t)
 
-    u, dudt = jax.jvp(fn, (z, r, t), (zeros_z, zeros_r, ones_t))  # each (B, D)
+    def fn_static_params(z_, r_, t_):
+        return fn({"params": params}, z_, r_, t_)
+
+    u, dudt = jax.jvp(
+        fn_static_params, (z, r, t), (zeros_z, zeros_r, ones_t)
+    )  # each (B, D)
 
     # Target and error
     u_tgt = v - (t - r)[:, None] * dudt  # (B, D)
@@ -82,30 +138,49 @@ def algorithm_1(fn, x, key):
 
 
 # JIT with fn static by position 0 (broad compatibility)
-algorithm_1_jit = jax.jit(algorithm_1, static_argnums=0)
+algorithm_1_jit = jax.jit(algorithm_1, static_argnums=(0, 4, 5, 6))
 # ===== Batched Algorithm 2 (sampling) =====
 
 
-def algorithm_2(fn, dim, key, batch_size):
+def algorithm_2(fn, dim, key, batch_size, n_steps=1):
     """
-    One-step sampling for a minibatch.
+    Multi-step sampling (Euler integrator) for the mean flow model.
+
     Args:
-      fn: callable, fn(z, r, t) -> u(z, r, t), batched
-      dim: data dimension (e.g., 2)
-      key: PRNGKey
-      batch_size: number of samples to generate
+        fn: callable,    fn(z, r, t) -> u(z, r, t), batched
+        dim: int         data dimension
+        key: PRNGKey
+        batch_size: int
+        n_steps: int     number of Euler steps (1 = your original algorithm_2)
+
     Returns:
-      x: (B, dim)
+        x: (B, dim) final generated samples
     """
-    e = p_0(key, batch_size, dim, dtype=T)  # (B, dim)
+    # initial sample from base distribution p_0
+    x = p_0(key, batch_size, dim, dtype=T)   # (B, dim)
 
-    # r,t can be scalars or (B,)—your MLP broadcasts fine. Use scalars for simplicity:
-    r = jnp.array(0.0, dtype=T)
-    t = jnp.array(1.0, dtype=T)
+    # time grid: t_0 = 1, t_n = 0
+    # shape: (n_steps+1,)
+    t_grid = jnp.linspace(1.0, 0.0, n_steps + 1, dtype=T)
 
-    u = fn(e, r, t)  # (B, dim)  <-- batched call
-    x = e - u
-    return x
+    # step function for lax.scan
+    def step(x, k):
+        t_prev = t_grid[k]      # t_k
+        t_next = t_grid[k+1]    # t_{k+1}
+        r = t_next              # r = next time
+        t = t_prev              # current time
+
+        dt = t - r              # positive step length
+
+        u = fn(x, r, t)         # (B, dim) vector field
+        x_new = x - dt * u      # Euler step
+
+        return x_new, None
+
+    # indices 0 .. n_steps-1
+    x_final, _ = jax.lax.scan(step, x, jnp.arange(n_steps))
+
+    return x_final
 
 
-algorithm_2_jit = jax.jit(algorithm_2, static_argnums=(0, 1, 3))
+algorithm_2_jit = jax.jit(algorithm_2, static_argnums=(0, 1, 3, 4))
