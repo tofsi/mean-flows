@@ -5,6 +5,7 @@ import math
 import numpy as np
 from scipy import spatial
 from typing import Optional, Tuple
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -12,16 +13,22 @@ from jax import random
 from flax import nnx
 
 T = jnp.float32  # global dtype
+_c = T(1e-3)  # Used for avoiding division by zero in loss computation.
+_drop_probability = T(0.1)
 
 
-def metric(error):
-    # Square loss, equation (9)
-    return jnp.sum(jnp.square(error))
+@partial(jax.jit, static_argnums=(1,))
+def metric(error, p):
+    # Weighted square loss, see appendix B.2 Loss Metrics
+    losses = jnp.sum(jnp.square(error), axis=1)
+    weights = jax.lax.stop_gradient(jnp.pow(losses + _c, -p))
+    return jnp.mean(weights * losses)
 
 
 # ===== Batched helpers =====
 
 
+@partial(jax.jit, static_argnums=(1, 2, 3, 4, 5))
 def sample_t_r(
     key,
     batch_size,
@@ -33,7 +40,8 @@ def sample_t_r(
     """Return per-sample r < t, shapes: r (B,), t (B,)."""
     t, r = dtype(0.0), dtype(0.0)
     u = None
-    key_sampler, key_ratio_of_sampling = random.split(key)
+    key_sampler, key_ratio_of_sampling = random.split(key, 2)
+
     if distribution == "uniform":
         # Uniform sampler
         u = random.uniform(
@@ -60,13 +68,7 @@ def sample_t_r(
     return t, r
 
 
-sample_t_r_jit = jax.jit(
-    sample_t_r,
-    static_argnums=(1, 2, 3, 4, 5),  # batch_size, sampler_kind, dtype
-    # sampler_params can be dynamic; or add 4 here if you want them static too
-)
-
-
+@partial(jax.jit, static_argnums=(1, 2, 3))
 def p_0(key, batch_size, dim, dtype=T):
     """Batch N(0, I). Shape: (B, dim)."""
     # Equivalent to multivariate_normal with mean=0, cov=I, but faster for batches
@@ -79,14 +81,20 @@ def p_0(key, batch_size, dim, dtype=T):
 # ===== Batched Algorithm 1: returns mean loss and per-sample losses =====
 
 
+@partial(jax.jit, static_argnums=(0, 5, 6, 7, 8, 9, 10, 11))
 def algorithm_1(
     fn,
     params,
     x,
+    c,
     key,
     ratio_of_sampling,
     distribution: str,
     sampler_args: Optional[Tuple[float, float]],
+    p,
+    omega: Optional[float],
+    embed_t_r=lambda t, r: (t, r),
+    jvp_computation_option=(False, True),
 ):
     """
     Batched Algorithm 1 loss.
@@ -94,18 +102,25 @@ def algorithm_1(
       fn: callable, fn(params, z, r, t) -> u(params, z, r, t), accepts batched (B,*) and returns (B, D)
       params: Parameters of the parametrized function fn for the field
       x : (B, D) batch of data points
+      c : (B, K) batch of (I assume one-hot encoded, can change this) classes for class-conditioning, can set to None if classes are not used
+      omega : Coefficient for classifier-free guidance. Set to None if not used
       key: PRNGKey
       ratio_of_sampling: float between 0 and 1, proportion of samples where r!=t
       distribution: str, either "uniform" or "lognorm". For the t, r sampling scheme.
       sampler_args: If None, uniform(0, 1) sampling. Elseif (a, b), logit-normal(a, b)
+      p: Loss weighting coefficient (see appendix B.2 in the paper for details)
+      positional_embedding : function, Choice of positional embedding of t and r
+      omega : float between 0 and 1, degree of CFG. If none, classifier-free guidance is not applied (see section 4.2, Mean Flows with Guidance)
     Returns:
       mean_loss: scalar
+      embed_t_r : function from t, r to some tuple of functions of t, r, specifying the positional embedding. See table 1c for examples.
+      jvp_computation : (bool, bool) specifying arguments for jax.jvp. The default argument corresponds to the true value. See table 1b for other (incorrect) examples.
     """
     B, D = x.shape
-    k_rt, k_e = random.split(key, 2)
+    k_rt, k_e, k_cfg = random.split(key, 3)
 
     # Sample r,t,e for the entire batch
-    t, r = sample_t_r_jit(
+    t, r = sample_t_r(
         k_rt, B, ratio_of_sampling, distribution, sampler_args, dtype=T
     )  # (B,), (B,)
     e = p_0(k_e, B, D, dtype=T)  # (B, D)
@@ -115,34 +130,67 @@ def algorithm_1(
     v = e - x  # (B, D)
 
     # JVP wrt t for the whole batch in one go:
-    # primals: (z, r, t), tangents: (0, 0, 1)
-    zeros_z = jnp.zeros_like(z)
-    zeros_r = jnp.zeros_like(r)
-    ones_t = jnp.ones_like(t)
+    # Here begins a slightly annoying part.
+    # We need to specify whether the network is class conditional or not
+    # This is done by checking omega == None (by convention)
+    # If class conditional networks are used, we must add c to our arguments.
+    # There are probably better ways of doing this idk
+    class_conditional = omega != None
+    if not class_conditional:
 
-    def fn_static_params(z_, r_, t_):
-        return fn({"params": params}, z_, r_, t_)
+        def fn_z_r_t(z_, r_, t_):
+            return fn({"params": params}, z_, *embed_t_r(t_, r_))
 
-    u, dudt = jax.jvp(
-        fn_static_params, (z, r, t), (zeros_z, zeros_r, ones_t)
-    )  # each (B, D)
+        # Target and error
+        # Compute tangents with possibly incorrect jvp computation
+        u, dudt = jax.jvp(
+            fn_z_r_t,
+            (z, r, t),
+            (
+                v,
+                jvp_computation_option[0] + jnp.zeros_like(r),
+                jvp_computation_option[1] + jnp.zeros_like(t),
+            ),
+        )
+        u_tgt = v - (t - r)[:, None] * dudt  # (B, D)
+        error = u - jax.lax.stop_gradient(u_tgt)  # (B, D)
+        return metric(error, p)
+    else:
+        drop_mask = random.bernoulli(k_cfg, p=_drop_probability, shape=(t.shape[0], 1))
+        null_c = jnp.zeros_like(c)
+        c_some_unconditional = jnp.where(drop_mask, null_c, c)
 
-    # Target and error
-    u_tgt = v - (t - r)[:, None] * dudt  # (B, D)
-    error = u - jax.lax.stop_gradient(u_tgt)  # (B, D)
+        def fn_z_r_t(z_, r_, t_):
+            return fn(
+                {"params": params}, z_, *embed_t_r(t_, r_), c_some_unconditional
+            )
 
-    # Loss per sample then mean
-    losses = jnp.sum(error * error, axis=1)  # (B,)
-    mean_loss = jnp.mean(losses)  # scalar
-    return mean_loss
+        u_diag = fn_z_r_t(z, t, t)
+        v_tilde = omega * v + (1 - omega) * u_diag
+        u, dudt = jax.jvp(
+            fn_z_r_t,
+            (z, r, t),
+            (
+                v_tilde,
+                jvp_computation_option[0] + jnp.zeros_like(r),
+                jvp_computation_option[1] + jnp.zeros_like(t),
+            ),
+        )
+
+        # Target and error
+        u_tgt = v_tilde - (t - r)[:, None] * dudt  # (B, D)
+        error = u - jax.lax.stop_gradient(u_tgt)  # (B, D)
+
+        # Loss per sample then mean
+        return metric(error, p)
 
 
 # JIT with fn static by position 0 (broad compatibility)
-algorithm_1_jit = jax.jit(algorithm_1, static_argnums=(0, 4, 5, 6))
 # ===== Batched Algorithm 2 (sampling) =====
 
 
-def algorithm_2(fn, dim, key, batch_size, n_steps=1):
+@partial(jax.jit, static_argnums=(0, 1, 3, 4, 5, 6)
+def algorithm_2(fn, dim, key, batch_size, embed_t_r = lambda t, r : (t, r), n_steps=1, c = None):
     """
     Multi-step sampling (Euler integrator) for the mean flow model.
 
@@ -152,12 +200,13 @@ def algorithm_2(fn, dim, key, batch_size, n_steps=1):
         key: PRNGKey
         batch_size: int
         n_steps: int     number of Euler steps (1 = your original algorithm_2)
+        c : optional class. Note, for a class conditional model, the correct option for marginal sampling is *not* c = None but rather c = jnp.zeros(n_classes)
 
     Returns:
         x: (B, dim) final generated samples
     """
     # initial sample from base distribution p_0
-    x = p_0(key, batch_size, dim, dtype=T)   # (B, dim)
+    x = p_0(key, batch_size, dim, dtype=T)  # (B, dim)
 
     # time grid: t_0 = 1, t_n = 0
     # shape: (n_steps+1,)
@@ -165,15 +214,14 @@ def algorithm_2(fn, dim, key, batch_size, n_steps=1):
 
     # step function for lax.scan
     def step(x, k):
-        t_prev = t_grid[k]      # t_k
-        t_next = t_grid[k+1]    # t_{k+1}
-        r = t_next              # r = next time
-        t = t_prev              # current time
+        t_prev = t_grid[k]  # t_k
+        t_next = t_grid[k + 1]  # t_{k+1}
+        r = t_next  # r = next time
+        t = t_prev  # current time
 
-        dt = t - r              # positive step length
-
-        u = fn(x, r, t)         # (B, dim) vector field
-        x_new = x - dt * u      # Euler step
+        dt = t - r  # positive step length
+        u = fn(x, *embed_t_r(t, r), c) if c != None else fn(x, *embed_t_r(t, r)) # (B, dim) vector field
+        x_new = x - dt * u  # Euler step
 
         return x_new, None
 
@@ -181,6 +229,3 @@ def algorithm_2(fn, dim, key, batch_size, n_steps=1):
     x_final, _ = jax.lax.scan(step, x, jnp.arange(n_steps))
 
     return x_final
-
-
-algorithm_2_jit = jax.jit(algorithm_2, static_argnums=(0, 1, 3, 4))
