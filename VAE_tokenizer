@@ -86,7 +86,11 @@ def decode_latents_to_images(latents_jax):
     images = torch.clamp(images, 0, 1)
     
     return images
+#################################################################################
 
+# From here on I have not checked the code
+
+##################################################################################
 # ========================================
 # 2. YOUR MEANFLOW ALGORITHMS (adapted for DiT)
 # ========================================
