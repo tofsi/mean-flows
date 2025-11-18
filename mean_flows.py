@@ -156,14 +156,13 @@ def algorithm_1(
         error = u - jax.lax.stop_gradient(u_tgt)  # (B, D)
         return metric(error, p)
     else:
-        drop_mask = random.bernoulli(k_cfg, p=_drop_probability, shape=(t.shape[0], 1))
-        null_c = jnp.zeros_like(c)
-        c_some_unconditional = jnp.where(drop_mask, null_c, c)
+        drop_mask = random.bernoulli(k_cfg, p=_drop_probability, shape=(t.shape[0],))
+        c_some_unconditional = jnp.where(
+            drop_mask, 0, c
+        )  # We use the convention c == 0 means no class.
 
         def fn_z_r_t(z_, r_, t_):
-            return fn(
-                {"params": params}, z_, *embed_t_r(t_, r_), c_some_unconditional
-            )
+            return fn({"params": params}, z_, *embed_t_r(t_, r_), c_some_unconditional)
 
         u_diag = fn_z_r_t(z, t, t)
         v_tilde = omega * v + (1 - omega) * u_diag
@@ -189,8 +188,10 @@ def algorithm_1(
 # ===== Batched Algorithm 2 (sampling) =====
 
 
-@partial(jax.jit, static_argnums=(0, 1, 3, 4, 5, 6)
-def algorithm_2(fn, dim, key, batch_size, embed_t_r = lambda t, r : (t, r), n_steps=1, c = None):
+@partial(jax.jit, static_argnums=(0, 1, 3, 4, 5))
+def algorithm_2(
+    fn, dim, key, batch_size, embed_t_r=lambda t, r: (t, r), n_steps=1, c=None
+):
     """
     Multi-step sampling (Euler integrator) for the mean flow model.
 
@@ -220,7 +221,9 @@ def algorithm_2(fn, dim, key, batch_size, embed_t_r = lambda t, r : (t, r), n_st
         t = t_prev  # current time
 
         dt = t - r  # positive step length
-        u = fn(x, *embed_t_r(t, r), c) if c != None else fn(x, *embed_t_r(t, r)) # (B, dim) vector field
+        u = (
+            fn(x, *embed_t_r(t, r), c) if c is not None else fn(x, *embed_t_r(t, r))
+        )  # (B, dim) vector field
         x_new = x - dt * u  # Euler step
 
         return x_new, None

@@ -141,3 +141,44 @@ def random_literal_cat(key, *dims, sigma=jnp.float32(0.05)):
     base = base.T.reshape((2, *dims))  # (2, dims...)
     noise = jax.random.normal(key_noise, (2, *dims)) * sigma
     return (base + noise).astype(sigma.dtype)
+
+
+# ---- class-conditional point cloud generator ----
+
+
+def random_literal_cloud(key, cls, *dims, sigma=jnp.float32(0.05)):
+    """
+    Class-conditional 2D point cloud.
+
+    Args
+    ----
+    key : PRNGKey
+    cls : int
+        1 -> cat point cloud
+        2 -> circle point cloud
+    *dims : shape of the sample (e.g. batch_size)
+    sigma : float32
+        noise scale
+
+    Returns
+    -------
+    pts : (2, *dims) array
+    """
+    n = math.prod(dims)
+    key_ang, key_noise = jax.random.split(key)
+
+    # angles on [0, 2π)
+    angles = jax.random.uniform(key_ang, (n,), minval=0.0, maxval=2 * jnp.pi)
+
+    if cls == 1:
+        # cat
+        base = jax.vmap(lambda th: cat_shape(th) / 200.0)(angles)  # (n, 2)
+    elif cls == 2:
+        # unit circle
+        base = jnp.stack([jnp.cos(angles), jnp.sin(angles)], axis=-1)  # (n, 2)
+    else:
+        raise ValueError(f"Unknown class {cls}; expected 1 (cat) or 2 (circle).")
+
+    base = base.T.reshape((2, *dims))  # (2, dims...)
+    noise = jax.random.normal(key_noise, (2, *dims)) * sigma
+    return (base + noise).astype(sigma.dtype)
