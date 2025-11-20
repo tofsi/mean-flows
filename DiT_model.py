@@ -379,12 +379,6 @@ def DiT_L_2(**kwargs):
 def DiT_XL_2(**kwargs):
     return DiT(depth=28, hidden_dim=1152, num_heads=16, patch_size=2, **kwargs)
 
-DiT_models = {
-    'DiT-B/2':  DiT_B_2,  
-    'DiT-B/4':  DiT_B_4,
-    'DiT-M/2':  DiT_M_2,
-    'DiT-L/2':  DiT_L_2,
-    'DiT-XL/2': DiT_XL_2
-}
+
  
 
