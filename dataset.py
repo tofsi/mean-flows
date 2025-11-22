@@ -101,10 +101,10 @@ class ImageNetDataset:
         # 3) Build list of (image_path, class_idx)
         paths: List[str] = []
         labels: List[int] = []
-        root_dir = self.root_dir + mode + "/"
+        mode_dir = os.path.join(self.root_dir, self.mode)
 
         if self.mode == "val" or self.mode == "test":
-            for fname in sorted(os.listdir(self.root_dir)):
+            for fname in sorted(os.listdir(mode_dir)):
                 if not fname.lower().endswith((".jpeg", ".jpg", ".png")):
                     continue
                 img_id = os.path.splitext(fname)[0]  # "ILSVRC2012_val_00000001"
@@ -116,16 +116,16 @@ class ImageNetDataset:
                     continue
                 cls_idx = self.syn_to_idx[syn]
 
-                paths.append(os.path.join(self.root_dir, fname))
+                paths.append(os.path.join(mode_dir, fname))
                 labels.append(cls_idx)
 
             self.paths = paths
             self.labels = np.array(labels, dtype=np.int32)
-            print(f"[ImageNetDataset] Loaded {len(self.paths)} images from {self.root_dir}")
+            print(f"[ImageNetDataset] Loaded {len(self.paths)} images from {mode_dir}")
         
         else if self.mode == "train":  # train mode
-            for syn in sorted(os.listdir(root_dir)):
-                syn_dir = os.path.join(root_dir, syn)
+            for syn in sorted(os.listdir(mode_dir)):
+                syn_dir = os.path.join(mode_dir, syn)
                 if not os.path.isdir(syn_dir):
                     continue
                 if syn not in self.syn_to_idx:
@@ -140,7 +140,7 @@ class ImageNetDataset:
                     labels.append(cls_idx)
             self.paths = paths
             self.labels = np.array(labels, dtype=np.int32)
-            print(f"[ImageNetDataset] Loaded {len(self.paths)} images from {root_dir}")
+            print(f"[ImageNetDataset] Loaded {len(self.paths)} images from {mode_dir}")
 
     def __len__(self) -> int:
         return len(self.paths)
@@ -213,13 +213,7 @@ def imagenet_data_loader(
 
 
 def TrainLoader():
-    train_dataset = ImageNetDataset(
-        root_dir=train_path,
-        labels_csv=train_labels_path,
-        mapping_path=mapping_path,
-        image_size=224,
-        train=True,
-    )
+    train_dataset = ImageNetDataset(mode="train")
     rng = jax.random.PRNGKey(42)
     train_loader = imagenet_data_loader(train_dataset, batch_size=64, rng=rng, shuffle=True)
     # test the loader
@@ -232,15 +226,7 @@ def TrainLoader():
 
 
 def ValLoader():
-    val_path = "/kaggle/input/imagenet-object-localization-challenge/ILSVRC/Data/CLS-LOC/val"
-    labels_path = "/kaggle/input/imagenet-object-localization-challenge/LOC_val_solution.csv"
-    val_dataset = ImageNetDataset(
-        root_dir=val_path,
-        labels_csv=labels_path,
-        mapping_path=mapping_path,
-        image_size=224,
-        train=False,
-    )
+    val_dataset = ImageNetDataset(mode="val")
     rng = jax.random.PRNGKey(0)
     val_loader = imagenet_data_loader(val_dataset, batch_size=64, rng=rng, shuffle=False)
     # test the loader
@@ -253,14 +239,7 @@ def ValLoader():
 
 
 def TestLoader():
-    test_path = "/kaggle/input/imagenet-object-localization-challenge/ILSVRC/Data/CLS-LOC/test"
-    test_dataset = ImageNetDataset(
-        root_dir=test_path,
-        labels_csv=test_labels_path,
-        mapping_path=mapping_path,
-        image_size=224,
-        train=False,
-    )
+    test_dataset = ImageNetDataset(mode="test")
     rng = jax.random.PRNGKey(1)
     test_loader = imagenet_data_loader(test_dataset, batch_size=64, rng=rng, shuffle=False)
     # test the loader
@@ -271,30 +250,6 @@ def TestLoader():
 
     return test_loader
 
-
-if __name__ == "__main__":
-    # Example paths from your question:
-    val_path = "/kaggle/input/imagenet-object-localization-challenge/ILSVRC/Data/CLS-LOC/val"
-    labels_path = "/kaggle/input/imagenet-object-localization-challenge/LOC_val_solution.csv"
-    mapping_path = "/kaggle/input/imagenet-object-localization-challenge/LOC_synset_mapping.txt"
-
-    dataset = ImageNetDataset(
-        root_dir=val_path,
-        labels_csv=labels_path,
-        mapping_path=mapping_path,
-        image_size=224,
-        train=False,
-    )
-    # RNG for shuffling
-    rng = jax.random.PRNGKey(0)
-    # One epoch over val set
-    loader = imagenet_data_loader(dataset, batch_size=64, rng=rng, shuffle=True)
-
-    for batch_imgs, batch_labels in loader:
-        print("Batch images:", batch_imgs.shape, batch_imgs.dtype)
-        print("Batch labels:", batch_labels.shape, batch_labels.dtype)
-        # Put your Flax model.apply / loss / eval here
-        break  # just see first batch
 
 
 
