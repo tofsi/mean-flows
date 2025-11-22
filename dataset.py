@@ -123,11 +123,7 @@ class ImageNetDataset:
             self.labels = np.array(labels, dtype=np.int32)
             print(f"[ImageNetDataset] Loaded {len(self.paths)} images from {mode_dir}")
         
-<<<<<<< Updated upstream
-        else if self.mode == "train":  # train mode
-=======
         elif self.mode == "train":  # train mode
->>>>>>> Stashed changes
             for syn in sorted(os.listdir(mode_dir)):
                 syn_dir = os.path.join(mode_dir, syn)
                 if not os.path.isdir(syn_dir):
