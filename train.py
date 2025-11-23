@@ -1,7 +1,8 @@
 ########################################################
 #               Training DiT Model                 #####
 ########################################################
-
+import os, json, time
+from flax.training import checkpoints
 import jax
 import numpy as np
 import jax.numpy as jnp
@@ -82,8 +83,20 @@ class Trainer(nn.Module):
         params = None
         opt_state = optimizer.init(params)
 
+        # ---- FID setup (done ONCE) ----
+        inception = fid.make_inception()
+        stats = np.load("imagenet_inception_stats.npz")
+        mu_w = jnp.asarray(stats["mu_w"])
+        cov_w = jnp.asarray(stats["cov_w"])
+
+        # Cheap proxy FID settings
+        fid_k = 1000  # FID-1K proxy
+
         # 3. Training loop
+        global_step = 0
         for epoch in range(trainingParams.epochs):
+            t0 = time.time()
+            epoch_losses = []
             for batch_idx, (images, labels) in enumerate(train_loader):
                 # Encode to latents
                 latents_np = encode_images_to_latents(images)
@@ -106,9 +119,32 @@ class Trainer(nn.Module):
                 )
                 updates, opt_state = optimizer.update(grads, opt_state)
                 params = optax.apply_updates(params, updates)
+                epoch_losses.append(float(loss))
+                global_step += 1
                 if batch_idx % 100 == 0:
                     print(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss}")
+
             print(f"Epoch {epoch} completed")
+            # ---- end of epoch: compute mean loss ----
+            mean_loss = float(np.mean(epoch_losses))
+            # Do FID-k once per epoch
+            fid_proxy = self.evaluate_model(
+                params, num_samples=fid_k, inception=inception, mu_w=mu_w, cov_w=cov_w
+            )
+            epoch_time = time.time() - t0
+            metrics = {
+                "epoch": epoch,
+                "global_step": global_step,
+                "mean_loss": mean_loss,
+                f"fid_{fid_k}": fid_proxy,
+                "epoch_time_sec": epoch_time,
+            }
+
+            print(
+                f"[epoch {epoch}] mean_loss={mean_loss:.4f}  FID-{fid_k}={fid_proxy:.3f}  time={epoch_time/60:.1f}m"
+            )
+            # ---- save params + metrics (overwrites params, appends metrics) ----
+            self.save_checkpoint_and_metrics(params, epoch, metrics)
         return params
 
     def generate_samples(self, params, num_samples=50_000, batch_size=128):
@@ -171,16 +207,21 @@ class Trainer(nn.Module):
 
             yield imgs_np
 
-    def evaluate_model(self, params, num_samples=50_000):
-        inception = fid.make_inception()
+    def evaluate_model(
+        self, params, num_samples=50_000, inception=None, mu_w=None, cov_w=None
+    ):
+        # Allow cacheing to avoid reloading during training:
+        if inception is None:
+            inception = fid.make_inception()
 
         # Load precomputed real stats
-        stats = np.load("imagenet_inception_stats.npz")
-        # TODO: We need to generate the above file
-        mu_w = jnp.asarray(stats["mu_w"])
-        cov_w = jnp.asarray(stats["cov_w"])
+        if mu_w is None or cov_w is None:
+            stats = np.load("imagenet_inception_stats.npz")
+            # TODO: We need to generate the above file
+            mu_w = jnp.asarray(stats["mu_w"])
+            cov_w = jnp.asarray(stats["cov_w"])
 
-        # Use the generator we just wrote
+        # Gemerated image iterator
         image_iter = self.generate_samples(params, num_samples)
 
         # Extract features
@@ -190,8 +231,27 @@ class Trainer(nn.Module):
         mu, cov = fid.compute_stats(gen_feats)
         fid_value = fid.fid_from_stats(mu, cov, mu_w, cov_w)
 
-        print("FID-50K:", float(fid_value))
+        print("FID_{}: {}".format(num_samples, float(float(fid_value))))
         return float(fid_value)
+
+    def save_checkpoint_and_metrics(
+        self, params, epoch, metrics, ckpt_dir="checkpoints"
+    ):
+        os.makedirs(ckpt_dir, exist_ok=True)
+
+        # Overwrite/latest checkpoint is fine:
+        checkpoints.save_checkpoint(
+            ckpt_dir=ckpt_dir,
+            target=params,
+            step=epoch,
+            overwrite=True,
+            keep=1,  # keep only latest
+        )
+
+        # Append metrics to a JSONL file
+        metrics_path = os.path.join(ckpt_dir, "metrics.jsonl")
+        with open(metrics_path, "a") as f:
+            f.write(json.dumps(metrics) + "\n")
 
 
 if __name__ == "__main__":
@@ -204,3 +264,4 @@ if __name__ == "__main__":
     )
     trainer = Trainer(trainingParams)
     trained_params = trainer.train()
+    fid_final = trainer.evaluate_model(trained_params, num_samples=50_000)
