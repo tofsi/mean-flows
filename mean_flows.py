@@ -116,7 +116,9 @@ def algorithm_1(
       embed_t_r : function from t, r to some tuple of functions of t, r, specifying the positional embedding. See table 1c for examples.
       jvp_computation : (bool, bool) specifying arguments for jax.jvp. The default argument corresponds to the true value. See table 1b for other (incorrect) examples.
     """
-    B, D = x.shape
+    B = x.shape[0]
+    x_flat = x.reshape(B, -1)  # (B, D)
+    D = x_flat.shape[1]
     k_rt, k_e, k_cfg = random.split(key, 3)
 
     # Sample r,t,e for the entire batch
@@ -126,8 +128,8 @@ def algorithm_1(
     e = p_0(k_e, B, D, dtype=T)  # (B, D)
 
     # Conditional path and direction
-    z = (1.0 - t)[:, None] * x + t[:, None] * e  # (B, D)
-    v = e - x  # (B, D)
+    z = (1.0 - t)[:, None] * x_flat + t[:, None] * e  # (B, D)
+    v = e - x_flat  # (B, D)
 
     # JVP wrt t for the whole batch in one go:
     # Here begins a slightly annoying part.
@@ -139,7 +141,9 @@ def algorithm_1(
     if not class_conditional:
 
         def fn_z_r_t(z_, r_, t_):
-            return fn({"params": params}, z_, *embed_t_r(t_, r_))
+            return fn(
+                {"params": params}, z_.reshape(x.shape), *embed_t_r(t_, r_)
+            ).reshape(B, -1)
 
         # Target and error
         # Compute tangents with possibly incorrect jvp computation
@@ -162,7 +166,12 @@ def algorithm_1(
         )  # We use the convention c == 0 means no class.
 
         def fn_z_r_t(z_, r_, t_):
-            return fn({"params": params}, z_, *embed_t_r(t_, r_), c_some_unconditional)
+            return fn(
+                {"params": params},
+                z_.reshape(x.shape),
+                *embed_t_r(t_, r_),
+                c_some_unconditional
+            ).reshape(B, -1)
 
         if omega == 1.0:
             v_tilde = v
