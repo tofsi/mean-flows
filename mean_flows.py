@@ -88,7 +88,7 @@ def algorithm_1(
     x,
     c,
     key,
-    ratio_of_sampling,
+    ratio_of_sampling: float,
     distribution: str,
     sampler_args: Optional[Tuple[float, float]],
     p,
@@ -164,8 +164,11 @@ def algorithm_1(
         def fn_z_r_t(z_, r_, t_):
             return fn({"params": params}, z_, *embed_t_r(t_, r_), c_some_unconditional)
 
-        u_diag = fn_z_r_t(z, t, t)
-        v_tilde = omega * v + (1 - omega) * u_diag
+        if omega == 1.0:
+            v_tilde = v
+        else:
+            u_diag = fn_z_r_t(z, t, t)
+            v_tilde = omega * v + (1.0 - omega) * u_diag
         u, dudt = jax.jvp(
             fn_z_r_t,
             (z, r, t),
