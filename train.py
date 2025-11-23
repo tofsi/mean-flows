@@ -12,7 +12,7 @@ import optax
 from dataclasses import dataclass
 from typing import Tuple
 
-from prepare_imagenet import build_dataloaders
+from prepare_imagenet import get_dataloaders
 from VAE_tokenizer import encode_images_to_latents, decode_latents_to_images
 from DiT_model import DiT_B_4, DiT_B_2, DiT_M_2, DiT_L_2, DiT_XL_2
 from mean_flows import algorithm_1, algorithm_2
@@ -69,11 +69,7 @@ class Trainer(nn.Module):
     def train(self):
         """Main training loop."""
         # 1. Build dataloaders
-        train_loader, val_loader, test_loader = build_dataloaders(
-            root_dir="./imagenet",
-            batch_size=32,
-            num_workers=4,
-        )
+        train_loader, test_loader = get_dataloaders(batch_size=32)
 
         # 2. Initialize model and optimizer
         model = Trainer.model()
