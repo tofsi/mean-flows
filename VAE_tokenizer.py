@@ -12,8 +12,12 @@ import torch
 import jax.numpy as jnp
 
 # from jax import random
-import numpy as np
+#import numpy as np
 from diffusers.models import AutoencoderKL
+
+#import torch.utils.dlpack
+#import jax.dlpack
+
 
 # from torchvision import transforms, datasets
 # from torch.utils.data import DataLoader
@@ -130,18 +134,16 @@ class VAETokenizer:
         """
         images_batch = images_batch.to(self.device)
 
-        # Normalize to [-1, 1] for VAE
-        images_batch = images_batch * 2 - 1
-
         with torch.no_grad():
             latent_dist = self.vae.encode(images_batch).latent_dist
             latents = latent_dist.sample()
             latents = latents * self.scaling_factor  # Scale
 
-        # Convert from PyTorch (B, C, H, W) to numpy BHWC
-        latents_np = latents.cpu().numpy()  # (B, 4, 32, 32)
-        latents_np = np.transpose(latents_np, (0, 2, 3, 1))  # (B, 32, 32, 4)
-        return latents_np
+        latents_jnp_old  = jnp.asarray(latents)
+        # Convert from PyTorch (B, C, H, W) to JAX (B, H, W, C) as output is described in the paper 
+        latents_jnp = jnp.transpose(latents_jnp_old, (0, 2, 3, 1))  # (B, 32, 32, 4)
+        
+        return latents_jnp
 
     # -----------------------
     # Decoding: latents -> images
@@ -154,22 +156,14 @@ class VAETokenizer:
         Returns:
             images: torch.Tensor (B, 3, 256, 256) in [0, 1]
         """
-        # Convert from JAX to numpy if needed
-        if isinstance(latents_jax, jnp.ndarray):
-            latents_np = np.array(latents_jax)
-        else:
-            latents_np = latents_jax
 
-        # BHWC -> BCHW
-        latents_np = np.transpose(latents_np, (0, 3, 1, 2))  # (B, 4, 32, 32)
-
-        latents_torch = torch.from_numpy(latents_np).to(self.device)
-        latents_torch = latents_torch / self.scaling_factor  # Unscale
+        # BHWC -> BCHW 
+        latents_jnp = jnp.transpose(latents_jax, (0, 3, 1, 2))  # (B, 4, 32, 32)
+    
+        latents_torch = torch.utils.dlpack.from_dlpack(latents_jnp)
+        latents_torch = latents_torch / vae.config.scaling_factor  # Unscale
 
         with torch.no_grad():
-            images = self.vae.decode(latents_torch).sample  # in [-1, 1]
-
-        # Convert from [-1, 1] to [0, 1]
-        images = (images + 1) / 2
-        images = torch.clamp(images, 0, 1)
+            images = self.vae.decode(latents_torch).sample  
+            
         return images
