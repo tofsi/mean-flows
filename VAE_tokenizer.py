@@ -1,86 +1,146 @@
-#from diffusers.models import AutoencoderKL
-#from diffusers import StableDiffusionPipeline
+# from diffusers.models import AutoencoderKL
+# from diffusers import StableDiffusionPipeline
 
-#model = "CompVis/stable-diffusion-v1-4"
-#vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse")
-#pipe = StableDiffusionPipeline.from_pretrained(model, vae=vae)
+# model = "CompVis/stable-diffusion-v1-4"
+# vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse")
+# pipe = StableDiffusionPipeline.from_pretrained(model, vae=vae)
 
 
 import torch
-import jax
+
+# import jax
 import jax.numpy as jnp
-from jax import random
+
+# from jax import random
 import numpy as np
 from diffusers.models import AutoencoderKL
-from torchvision import transforms, datasets
-from torch.utils.data import DataLoader
+
+# from torchvision import transforms, datasets
+# from torch.utils.data import DataLoader
 
 
 # ========================================
 # 1. SETUP VAE (PyTorch)
 # ========================================
-vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse")
-vae = vae.to("cuda" if torch.cuda.is_available() else "cpu")
-vae.eval()
+# vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse")
+# vae = vae.to("cuda" if torch.cuda.is_available() else "cpu")
+# vae.eval()
+#
+# print(f"VAE scaling factor: {vae.config.scaling_factor}")  # Should be ~0.18215
 
-print(f"VAE scaling factor: {vae.config.scaling_factor}")  # Should be ~0.18215
+#
+# def encode_images_to_latents(images_batch):
+#     """
+#     Encode images to latents for DiT.
+#
+#     Args:
+#         images_batch: torch.Tensor (B, 3, 256, 256) in range [0, 1]
+#
+#     Returns:
+#         latents: numpy array (B, 32, 32, 4) - JAX format (channels last)
+#     """
+#     device = next(vae.parameters()).device
+#     images_batch = images_batch.to(device)
+#
+#     # Normalize to [-1, 1] for VAE
+#     images_batch = images_batch * 2 - 1
+#
+#     with torch.no_grad():
+#         latent_dist = vae.encode(images_batch).latent_dist
+#         latents = latent_dist.sample()
+#         latents = latents * vae.config.scaling_factor  # Scale
+#
+#     # Convert from PyTorch (B, C, H, W) to JAX (B, H, W, C)
+#     latents_np = latents.cpu().numpy()  # (B, 4, 32, 32)
+#     latents_np = np.transpose(latents_np, (0, 2, 3, 1))  # (B, 32, 32, 4)
+#
+#     return latents_np
+#
+#
+# def decode_latents_to_images(latents_jax):
+#     """
+#     Decode latents back to images.
+#
+#     Args:
+#         latents_jax: JAX array (B, 32, 32, 4) or numpy array
+#
+#     Returns:
+#         images: torch.Tensor (B, 3, 256, 256) in range [0, 1]
+#     """
+#     device = next(vae.parameters()).device
+#
+#     # Convert from JAX to numpy if needed
+#     if isinstance(latents_jax, jnp.ndarray):
+#         latents_np = np.array(latents_jax)
+#     else:
+#         latents_np = latents_jax
+#
+#     # Convert from JAX format (B, H, W, C) to PyTorch (B, C, H, W)
+#     latents_np = np.transpose(latents_np, (0, 3, 1, 2))  # (B, 4, 32, 32)
+#
+#     latents_torch = torch.from_numpy(latents_np).to(device)
+#     latents_torch = latents_torch / vae.config.scaling_factor  # Unscale
+#
+#     with torch.no_grad():
+#         images = vae.decode(latents_torch).sample
+#
+#     # Convert from [-1, 1] to [0, 1]
+#     images = (images + 1) / 2
+#     images = torch.clamp(images, 0, 1)
+#
+#     return images
+#
 
-def encode_images_to_latents(images_batch):
-    """
-    Encode images to latents for DiT.
-    
-    Args:
-        images_batch: torch.Tensor (B, 3, 256, 256) in range [0, 1]
-    
-    Returns:
-        latents: numpy array (B, 32, 32, 4) - JAX format (channels last)
-    """
-    device = next(vae.parameters()).device
-    images_batch = images_batch.to(device)
-    
-    # Normalize to [-1, 1] for VAE
-    images_batch = images_batch * 2 - 1
-    
-    with torch.no_grad():
-        latent_dist = vae.encode(images_batch).latent_dist
-        latents = latent_dist.sample()
-        latents = latents * vae.config.scaling_factor  # Scale
-    
-    # Convert from PyTorch (B, C, H, W) to JAX (B, H, W, C)
-    latents_np = latents.cpu().numpy()  # (B, 4, 32, 32)
-    latents_np = np.transpose(latents_np, (0, 2, 3, 1))  # (B, 32, 32, 4)
-    
-    return latents_np
 
-def decode_latents_to_images(latents_jax):
-    """
-    Decode latents back to images.
-    
-    Args:
-        latents_jax: JAX array (B, 32, 32, 4) or numpy array
-    
-    Returns:
-        images: torch.Tensor (B, 3, 256, 256) in range [0, 1]
-    """
-    device = next(vae.parameters()).device
-    
-    # Convert from JAX to numpy if needed
-    if isinstance(latents_jax, jnp.ndarray):
-        latents_np = np.array(latents_jax)
-    else:
-        latents_np = latents_jax
-    
-    # Convert from JAX format (B, H, W, C) to PyTorch (B, C, H, W)
-    latents_np = np.transpose(latents_np, (0, 3, 1, 2))  # (B, 4, 32, 32)
-    
-    latents_torch = torch.from_numpy(latents_np).to(device)
-    latents_torch = latents_torch / vae.config.scaling_factor  # Unscale
-    
-    with torch.no_grad():
-        images = vae.decode(latents_torch).sample
-    
-    # Convert from [-1, 1] to [0, 1]
-    images = (images + 1) / 2
-    images = torch.clamp(images, 0, 1)
-    
-    return images
+class VAETokenizer:
+    def __init__(self):
+        self.vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse")
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        else:
+            self.device = torch.device("cpu")
+            print("[info (VAETokenizer)]: CUDA unavailable, falling back to CPU")
+        self.vae = self.vae.to(self.device)
+        self.vae.eval()
+        print(
+            f"[info (VAETokenizer)]: VAE scaling factor: {self.vae.config.scaling_factor}"
+        )
+
+    def encode_images_to_latents(self, images_batch: torch.Tensor) -> np.ndarray:
+        """
+        images_batch: torch.Tensor (B, 3, 256, 256) in [0, 1]
+        returns: numpy array (B, 32, 32, 4) BHWC
+        """
+        images_batch = images_batch.to(self.device)
+        images_batch = images_batch * 2 - 1  # [0,1] -> [-1,1]
+
+        with torch.no_grad():
+            latent_dist = self.vae.encode(images_batch).latent_dist
+            latents = latent_dist.sample()
+            latents = latents * self.vae.config.scaling_factor
+
+        latents_np = latents.cpu().numpy()  # (B, 4, 32, 32)
+        latents_np = np.transpose(latents_np, (0, 2, 3, 1))  # (B, 32, 32, 4)
+        return latents_np
+
+    def decode_latents_to_images(self, latents_jax) -> torch.Tensor:
+        """
+        latents_jax: jnp.ndarray or np.ndarray of shape (B, 32, 32, 4) BHWC
+        returns: torch.Tensor (B, 3, 256, 256) in [0, 1]
+        """
+        if isinstance(latents_jax, jnp.ndarray):
+            latents_np = np.array(latents_jax)
+        else:
+            latents_np = latents_jax
+
+        # BHWC -> BCHW
+        latents_np = np.transpose(latents_np, (0, 3, 1, 2))  # (B, 4, 32, 32)
+        latents_torch = torch.from_numpy(latents_np).to(self.device)
+        latents_torch = latents_torch / self.vae.config.scaling_factor
+
+        with torch.no_grad():
+            images = self.vae.decode(latents_torch).sample  # [-1,1]
+
+        images = (images + 1) / 2
+        images = torch.clamp(images, 0, 1)
+        return images

@@ -13,7 +13,9 @@ from dataclasses import dataclass, field
 from typing import Tuple, Callable, Optional, Any, Dict
 
 from prepare_imagenet import get_dataloaders, get_dataloaders_extracted
-from VAE_tokenizer import encode_images_to_latents, decode_latents_to_images
+from VAE_tokenizer import (
+    VAETokenizer,
+)  # encode_images_to_latents, decode_latents_to_images
 from DiT_model import DiT_B_4, DiT_B_2, DiT_M_2, DiT_L_2, DiT_XL_2
 from mean_flows import algorithm_1, algorithm_2
 
@@ -109,6 +111,9 @@ class Trainer:
         self.mu_w = jnp.asarray(stats["mu"])
         self.cov_w = jnp.asarray(stats["cov"])
 
+        # Tokenizer to extract latent representations
+        self.vae_tokenizer = VAETokenizer()  # TODO: change
+
     def adam_optimizer(self):
         """Create Adam optimizer with given learning rate and betas."""
         return optax.adam(
@@ -124,8 +129,10 @@ class Trainer:
         # train_loader, test_loader = get_dataloaders(batch_size=32)
         train_loader, val_loader = get_dataloaders_extracted(
             root_dir=str(IMAGENET_ROOT),  # your extracted folder
-            batch_size=4,  # NOTE: Increase batch size relative to GPU memory.
+            batch_size=2,  # NOTE: Increase batch size relative to GPU memory.
             num_workers=2,
+            max_train_samples=4,
+            max_val_samples=4,
         )
 
         # 2. Initialize model and optimizer
@@ -165,7 +172,7 @@ class Trainer:
             epoch_losses = []
             for batch_idx, (images, labels) in enumerate(train_loader):
                 # Encode to latents
-                latents_np = encode_images_to_latents(images)
+                latents_np = self.vae_tokenizer.encode_images_to_latents(images)
                 x = jnp.array(latents_np)  # Convert to JAX array
                 y = jnp.array(labels, dtype=jnp.int32)
                 key, subkey, dropout_key = jax.random.split(key, 3)
@@ -206,7 +213,7 @@ class Trainer:
             }
 
             print(
-                f"[epoch {epoch}] mean_loss={mean_loss:.4f}  FID-{fid_k}={fid_proxy:.3f}  time={epoch_time/60:.1f}m"
+                f"[epoch {epoch}] mean_loss={mean_loss:.4f}  FID-{FID_K}={fid_proxy:.3f}  time={epoch_time/60:.1f}m"
             )
             # ---- save params + metrics (overwrites params, appends metrics) ----
             self.save_checkpoint_and_metrics(params, epoch, metrics)
@@ -222,7 +229,7 @@ class Trainer:
         """
 
         # Wrapper around model.forward that algorithm_2 expects
-        def fn_wrapped(x_flat, t, r, y=None):
+        def fn_wrapped(x_flat, tr, y=None):
             """
             x_flat: (B, LATENT_DIM)
             t, r: scalar floats or arrays (B,)
@@ -234,10 +241,17 @@ class Trainer:
             # If unconditional: use null class = num_classes
             # TODO: Consistent unconditional convention. I think 0 should be used?
             if y is None:
-                y = jnp.full((B,), fill_value=0)
+                y = jnp.full((B,), fill_value=self.model.num_classes)
 
-            # DiT forward: model.forward(x, t, r, y)
-            u = self.model.forward(params, x, t, r, y, train=False)
+            # DiT forward pass.
+            u = self.model.apply(
+                {"params": params},
+                x,
+                tr,
+                y,
+                train=False,
+                method=self.model.forward,  # or method=model.__call__ if you use __call__
+            )  # (B, H, W, C) in latent space shape
             return u.reshape(B, LATENT_DIM)
 
         # Batch generator for FID
@@ -253,7 +267,7 @@ class Trainer:
                 LATENT_DIM,
                 sub,
                 batch_size,
-                self.TrainingParams.embed_t_r,  # (t, r) embedding fn
+                self.trainingParams.embed_t_r,  # (t, r) embedding fn
                 n_steps=1,  # MeanFlow 1-NFE
                 c=None,
             )
@@ -261,7 +275,7 @@ class Trainer:
             latents = latents_flat.reshape(batch_size, *LATENT_SHAPE)
 
             # decode to RGB torch tensor (B,3,256,256)
-            imgs_torch = decode_latents_to_images(latents)
+            imgs_torch = self.vae_tokenizer.decode_latents_to_images(latents)
 
             # convert to numpy BHWC for Inception
             imgs_np = np.transpose(imgs_torch.cpu().numpy(), (0, 2, 3, 1)).astype(
@@ -271,6 +285,8 @@ class Trainer:
             yield imgs_np
 
     def eval_fid(self, trained_params, num_samples=5000, batch_size=64):
+        batch_size = min(batch_size, num_samples)
+
         feats_fake = []
 
         # 2. Loop over generated batches
@@ -303,6 +319,7 @@ class Trainer:
     def save_checkpoint_and_metrics(
         self, params, epoch, metrics, ckpt_dir="checkpoints"
     ):
+        ckpt_dir = os.path.abspath(ckpt_dir)
         os.makedirs(ckpt_dir, exist_ok=True)
 
         # Overwrite/latest checkpoint is fine:

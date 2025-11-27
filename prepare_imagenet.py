@@ -249,10 +249,12 @@ class UnlabeledImageDataset(torch.utils.data.Dataset):
 
 def get_dataloaders_extracted(
     root_dir: str,
-    batch_size: int = 256,
-    num_workers: int = 8,
+    batch_size: int = 2,
+    num_workers: int = 1,
     train_subdir: str = "train",
     val_subdir: str = "val",  # or "test" if you only have test extracted
+    max_train_samples=None,
+    max_val_samples=None,
 ) -> Tuple[DataLoader, DataLoader]:
     """
     Use this when ImageNet is ALREADY extracted.
@@ -305,12 +307,27 @@ def get_dataloaders_extracted(
     )
 
     train_dataset = datasets.ImageFolder(str(train_dir), transform=train_transform)
+    # Restrict training samples if requested
+    if max_train_samples is not None:
+        max_train_samples = min(max_train_samples, len(train_dataset))
+        train_dataset = torch.utils.data.Subset(train_dataset, range(max_train_samples))
+        print(
+            f"[INFO (get_dataloaders_extracted())] Using only {max_train_samples} training images"
+        )
 
     try:
         val_dataset = datasets.ImageFolder(str(val_dir), transform=val_transform)
     except FileNotFoundError:
-        print("[info] Using unlabeled validation images.")
+        print("[info (get_dataloaders_extracted())] Using unlabeled validation images.")
         val_dataset = UnlabeledImageDataset(str(val_dir), transform=val_transform)
+
+    # Restrict validation samples if requested
+    if max_val_samples is not None:
+        max_val_samples = min(max_val_samples, len(val_dataset))
+        val_dataset = torch.utils.data.Subset(val_dataset, range(max_val_samples))
+        print(
+            f"[INFO (get_dataloaders_extracted())] Using only {max_val_samples} validation images"
+        )
 
     train_loader = DataLoader(
         train_dataset,

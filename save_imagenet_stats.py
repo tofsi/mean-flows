@@ -15,7 +15,7 @@ def main():
     )
 
     # 2. JAX FID feature extractor
-    fid_extract = fid_alt.make_fid_feature_extractor()
+    fid_extract = fid.make_fid_feature_extractor()
 
     feats_real = []
 

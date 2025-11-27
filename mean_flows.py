@@ -229,14 +229,14 @@ def algorithm_2(
     def step(x, k):
         t_prev = t_grid[k]  # t_k
         t_next = t_grid[k + 1]  # t_{k+1}
-        r = t_next  # r = next time
-        t = t_prev  # current time
+        r = jnp.full((batch_size,), t_next)  # r = next time
+        t = jnp.full((batch_size,), t_prev)  # current time
 
         dt = t - r  # positive step length
         u = (
-            fn(x, embed_t_r(t, r), c) if c is not None else fn(x, *embed_t_r(t, r))
+            fn(x, embed_t_r(t, r), c) if c is not None else fn(x, embed_t_r(t, r))
         )  # (B, dim) vector field
-        x_new = x - dt * u  # Euler step
+        x_new = x - dt[:, None] * u  # Euler step
 
         return x_new, None
 
