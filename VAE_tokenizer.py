@@ -38,9 +38,6 @@ def encode_images_to_latents(images_batch):
     device = next(vae.parameters()).device
     images_batch = images_batch.to(device)
     
-    # Normalize to [-1, 1] for VAE
-    images_batch = images_batch * 2 - 1
-    
     with torch.no_grad():
         latent_dist = vae.encode(images_batch).latent_dist
         latents = latent_dist.sample()
@@ -78,9 +75,5 @@ def decode_latents_to_images(latents_jax):
     
     with torch.no_grad():
         images = vae.decode(latents_torch).sample
-    
-    # Convert from [-1, 1] to [0, 1]
-    images = (images + 1) / 2
-    images = torch.clamp(images, 0, 1)
-    
+
     return images
