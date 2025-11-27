@@ -16,6 +16,8 @@ from prepare_imagenet import get_dataloaders, get_dataloaders_extracted
 from VAE_tokenizer import encode_images_to_latents, decode_latents_to_images
 from DiT_model import DiT_B_4, DiT_B_2, DiT_M_2, DiT_L_2, DiT_XL_2
 from mean_flows import algorithm_1, algorithm_2
+
+# import fid
 import fid
 from pathlib import Path
 
@@ -24,6 +26,9 @@ IMAGENET_ROOT = PROJECT_DIR / "imagenet"
 
 LATENT_SHAPE = (32, 32, 4)  # To match paper at page 14
 LATENT_DIM = np.prod(LATENT_SHAPE)
+# Cheap proxy FID settings
+FID_K = 2  # FID-1K proxy
+FID_BATCH_SIZE = 2
 
 
 @dataclass
@@ -50,7 +55,7 @@ class TrainingParams:
     # Embedding choice
     embed_t_r_name: str  # string label
     embed_t_r: Callable[[Any, Any], tuple]  # actual lambda injected by launcher
-
+    time_embed_dim: int
     # Time sampler: None means uniform, otherwise lognorm(a, b)
     time_sampler_params: Optional[Tuple[float, float]]
 
@@ -62,7 +67,11 @@ class TrainingParams:
 class Trainer:
     trainingParams: TrainingParams
 
-    def __init__(self, trainingParams):
+    def __init__(
+        self,
+        trainingParams,
+        validation_fid_stats_path=IMAGENET_ROOT / "imagenet_val_stats.npz",
+    ):
         self.trainingParams = trainingParams
 
         arch = trainingParams.architecture
@@ -79,6 +88,27 @@ class Trainer:
         else:
             raise ValueError("Unsupported architecture")
 
+        # define apply-shaped fn ONCE
+        def fn_apply(vars, x_bhwc, tr, y, rng):
+            return self.model.apply(
+                vars,
+                x_bhwc,
+                tr,
+                y,
+                train=True,
+                method=self.model.forward,
+                rngs={"dropout": rng},
+            )
+
+        self.fn_apply = fn_apply
+
+        # Setup FID Calculations
+        self.fid_extract = fid.make_fid_feature_extractor()
+        # Statistics of validation set, to be compared with values from generated images.
+        stats = np.load(validation_fid_stats_path)
+        self.mu_w = jnp.asarray(stats["mu"])
+        self.cov_w = jnp.asarray(stats["cov"])
+
     def adam_optimizer(self):
         """Create Adam optimizer with given learning rate and betas."""
         return optax.adam(
@@ -94,8 +124,8 @@ class Trainer:
         # train_loader, test_loader = get_dataloaders(batch_size=32)
         train_loader, val_loader = get_dataloaders_extracted(
             root_dir=str(IMAGENET_ROOT),  # your extracted folder
-            batch_size=32,
-            num_workers=4,
+            batch_size=4,  # NOTE: Increase batch size relative to GPU memory.
+            num_workers=2,
         )
 
         # 2. Initialize model and optimizer
@@ -104,9 +134,12 @@ class Trainer:
         # Latents are BHWC = (B, 32, 32, 4) from your VAE
         dummy_x = jnp.zeros((1, 32, 32, 4), dtype=jnp.float32)
 
-        # t and r are per-sample times: shape (B,)
+        # dummy time embedding
         dummy_t = jnp.ones((1,), dtype=jnp.float32)
         dummy_r = jnp.ones((1,), dtype=jnp.float32)
+
+        # build whatever embed_t_r wants (length varies by ablation)
+        dummy_tr = self.trainingParams.embed_t_r(dummy_t, dummy_r)
 
         # y are class labels: shape (B,)
         dummy_y = jnp.zeros((1,), dtype=jnp.int32)
@@ -116,8 +149,7 @@ class Trainer:
         variables = self.model.init(
             key_params,
             dummy_x,
-            dummy_t,
-            dummy_r,
+            dummy_tr,
             dummy_y,
             train=False,
             method=self.model.forward,
@@ -125,15 +157,6 @@ class Trainer:
         params = variables["params"]
         optimizer = self.adam_optimizer()
         opt_state = optimizer.init(params)
-
-        # ---- FID setup (done ONCE) ----
-        inception = fid.make_inception()
-        stats = np.load("imagenet_inception_stats.npz")
-        mu_w = jnp.asarray(stats["mu_w"])
-        cov_w = jnp.asarray(stats["cov_w"])
-
-        # Cheap proxy FID settings
-        fid_k = 1000  # FID-1K proxy
 
         # 3. Training loop
         global_step = 0
@@ -145,9 +168,10 @@ class Trainer:
                 latents_np = encode_images_to_latents(images)
                 x = jnp.array(latents_np)  # Convert to JAX array
                 y = jnp.array(labels, dtype=jnp.int32)
-                key, subkey = jax.random.split(key)
-                loss, grads = jax.value_and_grad(algorithm_1)(
-                    self.model.forward,
+                key, subkey, dropout_key = jax.random.split(key, 3)
+
+                loss, grads = jax.value_and_grad(algorithm_1, argnums=1)(
+                    lambda vars, x, tr, y: self.fn_apply(vars, x, tr, y, dropout_key),
                     params,
                     x,
                     y,
@@ -171,15 +195,13 @@ class Trainer:
             # ---- end of epoch: compute mean loss ----
             mean_loss = float(np.mean(epoch_losses))
             # Do FID-k once per epoch
-            fid_proxy = self.evaluate_model(
-                params, num_samples=fid_k, inception=inception, mu_w=mu_w, cov_w=cov_w
-            )
+            fid_proxy = self.eval_fid(params, FID_K, FID_BATCH_SIZE)
             epoch_time = time.time() - t0
             metrics = {
                 "epoch": epoch,
                 "global_step": global_step,
                 "mean_loss": mean_loss,
-                f"fid_{fid_k}": fid_proxy,
+                f"fid_{FID_K}": fid_proxy,
                 "epoch_time_sec": epoch_time,
             }
 
@@ -210,8 +232,9 @@ class Trainer:
             x = x_flat.reshape(B, *LATENT_SHAPE)
 
             # If unconditional: use null class = num_classes
+            # TODO: Consistent unconditional convention. I think 0 should be used?
             if y is None:
-                y = jnp.full((B,), fill_value=self.model.num_classes)
+                y = jnp.full((B,), fill_value=0)
 
             # DiT forward: model.forward(x, t, r, y)
             u = self.model.forward(params, x, t, r, y, train=False)
@@ -247,31 +270,34 @@ class Trainer:
 
             yield imgs_np
 
-    def evaluate_model(
-        self, params, num_samples=50_000, inception=None, mu_w=None, cov_w=None
-    ):
-        # Allow cacheing to avoid reloading during training:
-        if inception is None:
-            inception = fid.make_inception()
+    def eval_fid(self, trained_params, num_samples=5000, batch_size=64):
+        feats_fake = []
 
-        # Load precomputed real stats
-        if mu_w is None or cov_w is None:
-            stats = np.load("imagenet_inception_stats.npz")
-            # TODO: We need to generate the above file
-            mu_w = jnp.asarray(stats["mu_w"])
-            cov_w = jnp.asarray(stats["cov_w"])
+        # 2. Loop over generated batches
+        for imgs_np in self.generate_samples(trained_params, num_samples, batch_size):
+            # imgs_np: (B, 256, 256, 3) in [0,1], float32
+            imgs_jax = jnp.asarray(imgs_np)  # (B,H,W,3)
 
-        # Gemerated image iterator
-        image_iter = self.generate_samples(params, num_samples)
+            # 3. Extract Inception features for this batch (B,2048)
+            f = self.fid_extract(imgs_jax)
+            feats_fake.append(np.array(f))  # move to host
 
-        # Extract features
-        gen_feats = fid.extract_features_in_batches(inception, image_iter)
+        # 4. Concatenate all features
+        feats_fake = np.concatenate(feats_fake, axis=0)  # (N, 2048)
 
-        # Compute stats + FID
-        mu, cov = fid.compute_stats(gen_feats)
-        fid_value = fid.fid_from_stats(mu, cov, mu_w, cov_w)
+        # 5. Compute fake stats in JAX
+        x = jnp.asarray(feats_fake)
+        mu = jnp.mean(x, axis=0)
+        xc = x - mu
+        cov = (xc.T @ xc) / (x.shape[0] - 1)
 
-        print("FID_{}: {}".format(num_samples, float(float(fid_value))))
+        # 6. FID
+        fid_value = fid.fid_from_stats(
+            np.array(mu),
+            np.array(cov),
+            np.array(self.mu_w),
+            np.array(self.cov_w),
+        )
         return float(fid_value)
 
     def save_checkpoint_and_metrics(
@@ -307,4 +333,5 @@ if __name__ == "__main__":
     )
     trainer = Trainer(trainingParams)
     trained_params = trainer.train()
-    fid_final = trainer.evaluate_model(trained_params, num_samples=50_000)
+
+    fid_final = trainer.eval_fid(trained_params, num_samples=50_000)

@@ -25,9 +25,14 @@ Usage:
 """
 
 import argparse, copy, json, os, time, re
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 from pathlib import Path
 
 from ablation_configs import ABLATIONS
+import torch.multiprocessing as mp
+
+mp.set_start_method("spawn", force=True)
 from train import TrainingParams, Trainer
 
 
@@ -38,6 +43,15 @@ EMBED_FN_MAP = {
     "tr_t_tr": (lambda t, r: (t, r, t - r)),
     "t_tr_only": (lambda t, r: (t - r,)),
 }
+
+# --- dimensionality of above embeddings ---
+EMBED_DIM_MAP = {
+    "tr": 2,
+    "t_tr": 2,
+    "tr_t_tr": 3,
+    "t_tr_only": 1,
+}
+
 
 # --- JVP tangent label -> (dr_tangent, dt_tangent) (Table 1b, your ordering) ---
 JVP_TANGENT_MAP = {
@@ -94,6 +108,7 @@ def cfg_to_training_params(cfg: dict):
     if name not in EMBED_FN_MAP:
         raise ValueError(f"Unknown embed_t_r_name: {name}")
     cfg["embed_t_r"] = EMBED_FN_MAP[name]
+    cfg["time_embed_dim"] = EMBED_DIM_MAP[name]
 
     # --- jvp_tangent -> jvp_computation tuple ---
     jt = cfg.get("jvp_tangent")
@@ -118,6 +133,7 @@ def cfg_to_training_params(cfg: dict):
         "jvp_computation",
         "embed_t_r_name",
         "embed_t_r",
+        "time_embed_dim",
         "time_sampler_params",
     }
     missing = required - set(cfg.keys())
@@ -138,6 +154,7 @@ def cfg_to_training_params(cfg: dict):
         jvp_computation=cfg["jvp_computation"],
         embed_t_r_name=cfg["embed_t_r_name"],
         embed_t_r=cfg["embed_t_r"],
+        time_embed_dim=cfg["time_embed_dim"],
         time_sampler_params=cfg["time_sampler_params"],
     )
 
@@ -202,7 +219,7 @@ def run_one(cfg: dict, sweep_out: Path, run_name: str, final_fid_k: int):
 
         final_fid = None
         if final_fid_k and final_fid_k > 0:
-            final_fid = trainer.evaluate_model(trained_params, num_samples=final_fid_k)
+            final_fid = trainer.eval_fid(trained_params, num_samples=final_fid_k)
 
         # save final fid explicitly
         with open("final_fid.json", "w") as f:

@@ -224,14 +224,68 @@ class DiT(nn.Module):
         imgs = x.reshape(x.shape[0], h * p, w * p, c)
         return imgs
 
-    def forward(self, x, t, r, y, train=True):
+    @nn.compact
+    def __call__(self, x, tr, y, train: bool = True):
         """
-        Forward pass through the model
-        x: input image (B, H, W, C)
-        t: diffusion/ flow time (B,)
-        r: reference time (B,)
-        y: class labels (B,)
+        Flax forward pass. This MUST be compact because we create submodules here.
+
+        x: (B, H, W, C)
+        tr: tuple containing time embedding, e.g (t, r), each (B,)
+        y: (B,)
         """
+        # Patch embedding -> tokens
+        x_emb = PatchEmbed(
+            self.patch_size, self.in_channels, self.hidden_dim, name="patch_embed"
+        )(
+            x
+        )  # (B, N, D)
+
+        # Positional embedding
+        x_emb = PositionalEmbed(x_emb.shape[1], self.hidden_dim, name="pos_embed")(
+            x_emb
+        )  # (B, N, D)
+        # ---- variable-length time embedding ----
+        # Embed each scalar in tr and sum in hidden_dim space
+        time_cond = 0.0
+        for i, ti in enumerate(tr):
+            time_cond = time_cond + TimeEmbed(self.hidden_dim, name=f"time_embed_{i}")(
+                ti
+            )  # each gives (B, hidden_dim)
+
+        # Label embeddings (CFG dropout handled inside)
+        y_emb = LabelEmbed(
+            self.hidden_dim, self.num_classes, drop_prob=0.1, name="label_embed"
+        )(
+            y, train=train
+        )  # (B, D)
+
+        cond = time_cond + y_emb  # (B, hidden_dim)
+
+        # Transformer blocks: IMPORTANT to update x_emb each block
+        for i in range(self.depth):
+            x_emb = DiTBlock(self.hidden_dim, self.num_heads, name=f"block_{i}")(
+                x_emb, cond
+            )
+
+        # Final layer back to patch pixels
+        x_emb = FinalLayer(
+            self.hidden_dim, self.patch_size, self.out_channels, name="final_layer"
+        )(
+            x_emb, cond
+        )  # (B, N, p*p*C)
+
+        # Unpatchify to (B, H, W, C)
+        x_out = self.unpatchify(x_emb)
+        return x_out
+
+    """ def forward(self, x, t, r, y, train=True):
+        
+        # Forward pass through the model
+        # x: input image (B, H, W, C)
+        # t: diffusion/ flow time (B,)
+        # r: reference time (B,)
+        # y: class labels (B,)
+        
         # Patch embedding
         x_emb = PatchEmbed(self.patch_size, self.in_channels, self.hidden_dim)(
             x
@@ -259,7 +313,11 @@ class DiT(nn.Module):
             x, cond
         )  # (B, N, patch_size*patch_size*C)
         x = self.unpatchify(x)  # (B, H, W, C)
-        return x
+        return x """
+
+    # Keep your old API working
+    def forward(self, x, tr, y, train=True):
+        return self.__call__(x, tr, y, train=train)
 
     def forward_with_cfg(self, x, cfg):
         """

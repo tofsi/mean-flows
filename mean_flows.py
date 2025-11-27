@@ -142,7 +142,7 @@ def algorithm_1(
 
         def fn_z_r_t(z_, r_, t_):
             return fn(
-                {"params": params}, z_.reshape(x.shape), *embed_t_r(t_, r_)
+                {"params": params}, z_.reshape(x.shape), embed_t_r(t_, r_)
             ).reshape(B, -1)
 
         # Target and error
@@ -169,8 +169,8 @@ def algorithm_1(
             return fn(
                 {"params": params},
                 z_.reshape(x.shape),
-                *embed_t_r(t_, r_),
-                c_some_unconditional
+                embed_t_r(t_, r_),
+                c_some_unconditional,
             ).reshape(B, -1)
 
         if omega == 1.0:
@@ -234,7 +234,7 @@ def algorithm_2(
 
         dt = t - r  # positive step length
         u = (
-            fn(x, *embed_t_r(t, r), c) if c is not None else fn(x, *embed_t_r(t, r))
+            fn(x, embed_t_r(t, r), c) if c is not None else fn(x, *embed_t_r(t, r))
         )  # (B, dim) vector field
         x_new = x - dt * u  # Euler step
 
