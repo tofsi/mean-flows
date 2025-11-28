@@ -7,3 +7,4 @@ imagenet/downloads
 imagenet/downloads/imagenet_val_raw
 runs
 data
+figures

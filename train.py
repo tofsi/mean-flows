@@ -112,7 +112,7 @@ class Trainer:
         self.cov_w = jnp.asarray(stats["cov"])
 
         # Tokenizer to extract latent representations
-        self.vae_tokenizer = VAETokenizer()  # TODO: change
+        self.vae_tokenizer = VAETokenizer()
 
     def adam_optimizer(self):
         """Create Adam optimizer with given learning rate and betas."""
