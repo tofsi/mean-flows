@@ -172,8 +172,9 @@ class Trainer:
             epoch_losses = []
             for batch_idx, (images, labels) in enumerate(train_loader):
                 # Encode to latents
-                latents_np = self.vae_tokenizer.encode_images_to_latents(images)
-                x = jnp.array(latents_np)  # Convert to JAX array
+                x = self.vae_tokenizer.encode_images_to_latents(images)
+                # latents_np = self.vae_tokenizer.encode_images_to_latents(images)
+                # x = jnp.array(latents_np)  # Convert to JAX array
                 y = jnp.array(labels, dtype=jnp.int32)
                 key, subkey, dropout_key = jax.random.split(key, 3)
 
