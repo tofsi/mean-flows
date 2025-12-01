@@ -124,7 +124,7 @@ class VAETokenizer:
     # -----------------------
     # Encoding: images -> latents
     # -----------------------
-    def encode_images_to_latents(self, images_batch: torch.Tensor) -> np.ndarray:
+    def encode_images_to_latents(self, images_batch: torch.Tensor) -> jnp.ndarray:
         """
         Args:
             images_batch: torch.Tensor (B, 3, 256, 256) in [0, 1]
