@@ -24,7 +24,7 @@ Usage:
   python run_ablation.py --dry_run
 """
 
-import argparse, copy, json, os, time, re
+import argparse, copy, json, os, time, re, ast
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 from pathlib import Path
@@ -63,23 +63,45 @@ JVP_TANGENT_MAP = {
 
 
 def parse_set_kv(kv: str):
-    """Parse --set key=value. Supports numbers, JSON, bool/null, or strings."""
+    """
+    Parse --set key=value.
+
+    Supports:
+      - JSON (numbers, lists, dicts, true/false/null)
+      - bare numbers (e.g. 0.25, 10)
+      - Python literals (tuples, lists, None, etc.)
+      - strings (fallback)
+    """
     if "=" not in kv:
         raise ValueError("--set requires key=value")
     k, v = kv.split("=", 1)
     v = v.strip()
 
+    # Explicit handling for None (case-insensitive)
+    if v.lower() == "none":
+        return k, None
+
+    # 1) Try JSON (handles numbers, bool, null, lists, dicts)
     try:
         parsed = json.loads(v)
         return k, parsed
     except Exception:
         pass
 
+    # 2) Try plain numbers (backwards compatible)
     try:
         if "." in v or "e" in v.lower():
             return k, float(v)
         return k, int(v)
     except Exception:
+        pass
+
+    # 3) Try Python literals: tuples, lists, "None", etc.
+    try:
+        parsed = ast.literal_eval(v)
+        return k, parsed
+    except Exception:
+        # 4) Fallback: leave as string
         return k, v
 
 
