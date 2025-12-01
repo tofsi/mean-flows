@@ -120,10 +120,39 @@ class InceptionV3(nn.Module):
     dtype: str = "float32"
 
     def setup(self):
+        """
+        Modified so weights are cached locally in data/inception_weights.pkl.
+        """
         if self.pretrained:
-            ckpt_file = download(self.ckpt_path)
-            self.params_dict = pickle.load(open(ckpt_file, "rb"))
+            local_path = "data/inception_weights.pkl"  ### MODIFIED
+
+            # If the local cached file exists, load from it
+            if os.path.exists(local_path):  ### MODIFIED
+                print(
+                    f"Loading cached Inception weights from {local_path}"
+                )  ### MODIFIED
+                with open(local_path, "rb") as f:  ### MODIFIED
+                    self.params_dict = pickle.load(f)  ### MODIFIED
+
+            else:
+                # Otherwise: download using the existing downloader, then cache it.
+                print(
+                    "Cached weights not found; downloading Inception weights..."
+                )  ### MODIFIED
+                ckpt_file = download(self.ckpt_path)  ### existing
+
+                # Save to data/inception_weights.pkl
+                os.makedirs("data", exist_ok=True)  ### MODIFIED
+                with open(ckpt_file, "rb") as src, open(
+                    local_path, "wb"
+                ) as dst:  ### MODIFIED
+                    dst.write(src.read())  ### MODIFIED
+
+                with open(local_path, "rb") as f:  ### MODIFIED
+                    self.params_dict = pickle.load(f)  ### MODIFIED
+
             self.num_classes_ = 1000
+
         else:
             self.params_dict = None
             self.num_classes_ = self.num_classes
