@@ -12,11 +12,11 @@ import torch
 import jax.numpy as jnp
 
 # from jax import random
-#import numpy as np
+# import numpy as np
 from diffusers.models import AutoencoderKL
 
-#import torch.utils.dlpack
-#import jax.dlpack
+# import torch.utils.dlpack
+# import jax.dlpack
 
 
 # from torchvision import transforms, datasets
@@ -139,10 +139,10 @@ class VAETokenizer:
             latents = latent_dist.sample()
             latents = latents * self.scaling_factor  # Scale
 
-        latents_jnp_old  = jnp.asarray(latents)
-        # Convert from PyTorch (B, C, H, W) to JAX (B, H, W, C) as output is described in the paper 
+        latents_jnp_old = jnp.asarray(latents)
+        # Convert from PyTorch (B, C, H, W) to JAX (B, H, W, C) as output is described in the paper
         latents_jnp = jnp.transpose(latents_jnp_old, (0, 2, 3, 1))  # (B, 32, 32, 4)
-        
+
         return latents_jnp
 
     # -----------------------
@@ -157,13 +157,13 @@ class VAETokenizer:
             images: torch.Tensor (B, 3, 256, 256) in [0, 1]
         """
 
-        # BHWC -> BCHW 
+        # BHWC -> BCHW
         latents_jnp = jnp.transpose(latents_jax, (0, 3, 1, 2))  # (B, 4, 32, 32)
-    
+
         latents_torch = torch.utils.dlpack.from_dlpack(latents_jnp)
-        latents_torch = latents_torch / vae.config.scaling_factor  # Unscale
+        latents_torch = latents_torch / self.vae.config.scaling_factor  # Unscale
 
         with torch.no_grad():
-            images = self.vae.decode(latents_torch).sample  
-            
+            images = self.vae.decode(latents_torch).sample
+
         return images
