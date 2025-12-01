@@ -29,8 +29,8 @@ IMAGENET_ROOT = PROJECT_DIR / "imagenet"
 LATENT_SHAPE = (32, 32, 4)  # To match paper at page 14
 LATENT_DIM = np.prod(LATENT_SHAPE)
 # Cheap proxy FID settings
-FID_K = 2  # FID-1K proxy
-FID_BATCH_SIZE = 2
+FID_K = 50000  # FID-1K proxy
+FID_BATCH_SIZE = 32
 
 
 @dataclass
@@ -129,10 +129,10 @@ class Trainer:
         # train_loader, test_loader = get_dataloaders(batch_size=32)
         train_loader, val_loader = get_dataloaders_extracted(
             root_dir=str(IMAGENET_ROOT),  # your extracted folder
-            batch_size=2,  # NOTE: Increase batch size relative to GPU memory.
-            num_workers=2,
-            max_train_samples=4,
-            max_val_samples=4,
+            batch_size=16,  # NOTE: Increase batch size relative to GPU memory.
+            num_workers=4,
+            max_train_samples=5000,
+            max_val_samples=500,
         )
 
         # 2. Initialize model and optimizer

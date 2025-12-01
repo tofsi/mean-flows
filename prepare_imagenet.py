@@ -73,7 +73,7 @@ def prepare_test(test_tar: Path, root: Path):
     The test tar has images without labels. We just extract them
     into root/test/ and build a custom Dataset around it.
     """
-    test_root = root / "test"
+    test_root = root / "val"
     if test_root.exists() and any(test_root.iterdir()):
         print("[test] Test directory already exists, skipping.")
         return
@@ -158,7 +158,7 @@ def build_dataloaders(
     )
 
     train_dataset = datasets.ImageFolder(root / "train", transform=train_transform)
-    test_dataset = ImageNetTestDataset(root / "test", transform=val_test_transform)
+    test_dataset = ImageNetTestDataset(root / "val", transform=val_test_transform)
 
     train_loader = DataLoader(
         train_dataset,
@@ -184,8 +184,8 @@ def build_dataloaders(
 
 
 def get_dataloaders(batch_size: int):
-    root = Path("/home/silpasoninallacheruvu/imagenet")
-    downloads = root / "downloads"
+    root = Path("/home/silpasoninallacheruvu/mean-flows/imagenet")
+    downloads = root / "data"
     dev_dir = root / "ILSVRC2012_devkit_t12"
 
     # 1) Download all files

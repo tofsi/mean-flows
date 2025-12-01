@@ -13,7 +13,7 @@
 ABLATIONS = {
     "default": {
         "architecture": "DiT-B-4",
-        "epochs": 80,
+        "epochs": 10, 
         "lr": 1e-4,
         "beta1": 0.9,
         "beta2": 0.95,
