@@ -29,7 +29,7 @@ IMAGENET_ROOT = PROJECT_DIR / "imagenet"
 LATENT_SHAPE = (32, 32, 4)  # To match paper at page 14
 LATENT_DIM = np.prod(LATENT_SHAPE)
 # Cheap proxy FID settings
-FID_K = 50000  # FID-1K proxy
+FID_K = 1000  #  FID-1K proxy
 FID_BATCH_SIZE = 32
 
 
@@ -72,10 +72,16 @@ class Trainer:
     def __init__(
         self,
         trainingParams,
+        run_dir="runs",
+        checkpoint_dir="checkpoints",
+        resume_from_checkpoints=False,
         validation_fid_stats_path=IMAGENET_ROOT / "imagenet_val_stats.npz",
     ):
-        self.trainingParams = trainingParams
 
+        self.trainingParams = trainingParams
+        self.resume_from_checkpoints = resume_from_checkpoints
+        self.checkpoint_dir = checkpoint_dir
+        self.checkpoint_dir = os.path.abspath(checkpoint_dir)
         arch = trainingParams.architecture
         if arch == "DiT-B-4":
             self.model = DiT_B_4()
@@ -134,40 +140,64 @@ class Trainer:
             max_train_samples=5000,
             max_val_samples=500,
         )
-
-        # 2. Initialize model and optimizer
-        key = jax.random.PRNGKey(42)
-        key, key_params = jax.random.split(key)
-        # Latents are BHWC = (B, 32, 32, 4) from your VAE
-        dummy_x = jnp.zeros((1, 32, 32, 4), dtype=jnp.float32)
-
-        # dummy time embedding
-        dummy_t = jnp.ones((1,), dtype=jnp.float32)
-        dummy_r = jnp.ones((1,), dtype=jnp.float32)
-
-        # build whatever embed_t_r wants (length varies by ablation)
-        dummy_tr = self.trainingParams.embed_t_r(dummy_t, dummy_r)
-
-        # y are class labels: shape (B,)
-        dummy_y = jnp.zeros((1,), dtype=jnp.int32)
-
-        # IMPORTANT: DiT has no __call__, so init via method=model.forward.
-        # Also set train=False so LabelEmbed won't try to use dropout RNG at init.
-        variables = self.model.init(
-            key_params,
-            dummy_x,
-            dummy_tr,
-            dummy_y,
-            train=False,
-            method=self.model.forward,
-        )
-        params = variables["params"]
+        # ---------- 2. Initialize / restore training state ----------
+        ckpt_dir = self.checkpoint_dir
         optimizer = self.adam_optimizer()
-        opt_state = optimizer.init(params)
+
+        # Defaults if no checkpoint
+        key = jax.random.PRNGKey(42)
+        params = None
+        opt_state = None
+        global_step = 0
+        start_epoch = 0
+
+        if self.resume_from_checkpoints:
+            # This will load the latest checkpoint in self.checkpoint_dir
+            restored = checkpoints.restore_checkpoint(self.checkpoint_dir, target=None)
+            if restored is not None:
+                print(f"[Trainer] Resumed full state from {ckpt_dir}")
+                params = restored.get("params")
+                opt_state = restored.get("opt_state")
+                global_step = int(restored.get("global_step", 0))
+                # resume from next epoch
+                start_epoch = int(restored.get("epoch", 0)) + 1
+                key = restored.get("key", key)
+        if params is None:
+            print(
+                f"[Trainer] No checkpoint found in {self.checkpoint_dir}, starting from scratch."
+            )
+            # 2. Initialize model and optimizer
+            key = jax.random.PRNGKey(42)
+            key, key_params = jax.random.split(key)
+            # Latents are BHWC = (B, 32, 32, 4) from your VAE
+            dummy_x = jnp.zeros((1, 32, 32, 4), dtype=jnp.float32)
+
+            # dummy time embedding
+            dummy_t = jnp.ones((1,), dtype=jnp.float32)
+            dummy_r = jnp.ones((1,), dtype=jnp.float32)
+
+            # build whatever embed_t_r wants (length varies by ablation)
+            dummy_tr = self.trainingParams.embed_t_r(dummy_t, dummy_r)
+
+            # y are class labels: shape (B,)
+            dummy_y = jnp.zeros((1,), dtype=jnp.int32)
+
+            # IMPORTANT: DiT has no __call__, so init via method=model.forward.
+            # Also set train=False so LabelEmbed won't try to use dropout RNG at init.
+            variables = self.model.init(
+                key_params,
+                dummy_x,
+                dummy_tr,
+                dummy_y,
+                train=False,
+                method=self.model.forward,
+            )
+            params = variables["params"]
+            optimizer = self.adam_optimizer()
+            opt_state = optimizer.init(params)
 
         # 3. Training loop
-        global_step = 0
-        for epoch in range(self.trainingParams.epochs):
+        for epoch in range(start_epoch, self.trainingParams.epochs):
             t0 = time.time()
             epoch_losses = []
             for batch_idx, (images, labels) in enumerate(train_loader):
@@ -205,6 +235,10 @@ class Trainer:
             # Do FID-k once per epoch
             fid_proxy = self.eval_fid(params, FID_K, FID_BATCH_SIZE)
             epoch_time = time.time() - t0
+            print(
+                f"[epoch {epoch}] mean_loss={mean_loss:.4f}  FID-{FID_K}={fid_proxy:.3f}  time={epoch_time/60:.1f}m"
+            )
+            # ---- save params + metrics (overwrites params, appends metrics) ----
             metrics = {
                 "epoch": epoch,
                 "global_step": global_step,
@@ -212,12 +246,14 @@ class Trainer:
                 f"fid_{FID_K}": fid_proxy,
                 "epoch_time_sec": epoch_time,
             }
-
-            print(
-                f"[epoch {epoch}] mean_loss={mean_loss:.4f}  FID-{FID_K}={fid_proxy:.3f}  time={epoch_time/60:.1f}m"
-            )
-            # ---- save params + metrics (overwrites params, appends metrics) ----
-            self.save_checkpoint_and_metrics(params, epoch, metrics)
+            state = {
+                "params": params,
+                "opt_state": opt_state,
+                "epoch": epoch,
+                "global_step": global_step,
+                "key": key,
+            }
+            self.save_checkpoint_and_metrics(state, epoch, metrics)
         return params
 
     def generate_samples(self, params, num_samples=50_000, batch_size=128):
@@ -317,23 +353,23 @@ class Trainer:
         )
         return float(fid_value)
 
-    def save_checkpoint_and_metrics(
-        self, params, epoch, metrics, ckpt_dir="checkpoints"
-    ):
-        ckpt_dir = os.path.abspath(ckpt_dir)
-        os.makedirs(ckpt_dir, exist_ok=True)
+    def save_checkpoint_and_metrics(self, state, epoch, metrics):
+        """
+        state: dict with keys like:
+            'params', 'opt_state', 'epoch', 'global_step', 'key'
+        """
+        self.checkpoint_dir = os.path.abspath(self.checkpoint_dir)
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
 
-        # Overwrite/latest checkpoint is fine:
         checkpoints.save_checkpoint(
-            ckpt_dir=ckpt_dir,
-            target=params,
+            ckpt_dir=self.checkpoint_dir,
+            target=state,
             step=epoch,
             overwrite=True,
             keep=1,  # keep only latest
         )
 
-        # Append metrics to a JSONL file
-        metrics_path = os.path.join(ckpt_dir, "metrics.jsonl")
+        metrics_path = os.path.join(self.checkpoint_dir, "metrics.jsonl")
         with open(metrics_path, "a") as f:
             f.write(json.dumps(metrics) + "\n")
 

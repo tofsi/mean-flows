@@ -16,15 +16,27 @@ What it does:
         <outdir>/summary.csv
         <outdir>/<sweep_key>/summary.csv
 
+  Reloading from checkpoints and skipping completed runs:
+  - If a run has a DONE file, it is skipped (training assumed complete).
+  - If checkpoints/ exists but DONE is missing, training is resumed from latest
+    checkpoint (via a resume_from_checkpoint flag passed to Trainer).
+  - If --clear_checkpoints is given, checkpoints and DONE are deleted at the
+    start of each run so it restarts from scratch.
+
 Usage:
   python run_ablation.py --all
   python run_ablation.py --ablation time_sampler_params
   python run_ablation.py --set epochs=20 --ablation p
   python run_ablation.py --set p=0.5 --set ratio_r_not_eq_t=0.5
   python run_ablation.py --dry_run
+
+  # force re-run from scratch (wipe checkpoints/DONE)
+  python run_ablation.py --ablation embed_t_r_name --clear_checkpoints
 """
 
-import argparse, copy, json, os, time, re, ast
+import argparse, copy, json, os, time, re, ast, shutil
+
+from flax.training import checkpoints
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 from pathlib import Path
@@ -218,7 +230,22 @@ def write_csv_from_jsonl(jsonl_path: Path, csv_path: Path):
         w.writerows(flat_rows)
 
 
-def run_one(cfg: dict, sweep_out: Path, run_name: str, final_fid_k: int):
+def clear_run_checkpoints(run_dir: Path):
+    """Delete checkpoints, DONE marker and final_fid.json for a run."""
+    ckpt_dir = run_dir / "checkpoints"
+    if ckpt_dir.exists():
+        shutil.rmtree(ckpt_dir)
+    done_file = run_dir / "DONE"
+    if done_file.exists():
+        done_file.unlink()
+    final_fid_file = run_dir / "final_fid.json"
+    if final_fid_file.exists():
+        final_fid_file.unlink()
+
+
+def run_one(
+    cfg: dict, sweep_out: Path, run_name: str, final_fid_k: int, clear_ckpts=False
+):
     """
     Run training in its own directory so checkpoints/metrics are per-run.
     Then compute final FID-K and save it.
@@ -230,8 +257,40 @@ def run_one(cfg: dict, sweep_out: Path, run_name: str, final_fid_k: int):
     with open(run_dir / "config.json", "w") as f:
         json.dump(cfg, f, indent=2)
 
+    if clear_ckpts:
+        print(f"[run_ablation] Clearing checkpoints for {run_name}")
+        clear_run_checkpoints(run_dir)
+
+    done_file = run_dir / "DONE"
+    final_fid_file = run_dir / "final_fid.json"
+    done_file = run_dir / "DONE"
+    final_fid_file = run_dir / "final_fid.json"
+
+    # Case 1: training already finished for this config
+    if done_file.exists():
+        print(f"[run_ablation] Skipping {run_name}: DONE marker exists.")
+        final_fid = None
+        if final_fid_file.exists():
+            try:
+                with open(final_fid_file, "r") as f:
+                    final_fid = json.load(f).get("final_fid")
+            except Exception:
+                final_fid = None
+        return final_fid, str(run_dir)
+
     tp = cfg_to_training_params(cfg)
-    trainer = Trainer(tp)
+    resume = False
+    ckpt_dir = os.path.join(run_dir, "checkpoints")
+    latest = checkpoints.latest_checkpoint(ckpt_dir)
+    if latest is not None:
+        print(f"[run_ablation] Found existing checkpoint: {latest}")
+        resume = True
+
+    trainer = Trainer(
+        tp,
+        checkpoint_dir=ckpt_dir,
+        resume_from_checkpoints=resume,
+    )
 
     # run inside run_dir so Trainer writes checkpoints there
     old_cwd = os.getcwd()
@@ -289,6 +348,11 @@ def main():
         "--dry_run",
         action="store_true",
         help="Print configs that would run, but do not train.",
+    )
+    ap.add_argument(
+        "--clear_checkpoints",
+        action="store_true",
+        help="Before each run, delete its checkpoints/DONE/final_fid so it restarts from scratch.",
     )
     args = ap.parse_args()
 

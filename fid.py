@@ -124,6 +124,12 @@ class InceptionV3(nn.Module):
         Modified so weights are cached locally in data/inception_weights.pkl.
         """
         if self.pretrained:
+            project_root = os.path.dirname(
+                os.path.abspath(__file__)
+            )  # directory of fid.py
+            cache_dir = os.path.join(project_root, "data", "jax_fid")
+            os.makedirs(cache_dir, exist_ok=True)
+            local_path = os.path.join(cache_dir, "inception_weights.pkl")
             local_path = "data/inception_weights.pkl"  ### MODIFIED
 
             # If the local cached file exists, load from it
