@@ -130,7 +130,6 @@ class InceptionV3(nn.Module):
             cache_dir = os.path.join(project_root, "data", "jax_fid")
             os.makedirs(cache_dir, exist_ok=True)
             local_path = os.path.join(cache_dir, "inception_weights.pkl")
-            local_path = "data/inception_weights.pkl"  ### MODIFIED
 
             # If the local cached file exists, load from it
             if os.path.exists(local_path):  ### MODIFIED
@@ -148,7 +147,6 @@ class InceptionV3(nn.Module):
                 ckpt_file = download(self.ckpt_path)  ### existing
 
                 # Save to data/inception_weights.pkl
-                os.makedirs("data", exist_ok=True)  ### MODIFIED
                 with open(ckpt_file, "rb") as src, open(
                     local_path, "wb"
                 ) as dst:  ### MODIFIED
