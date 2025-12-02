@@ -29,8 +29,8 @@ IMAGENET_ROOT = PROJECT_DIR / "imagenet"
 LATENT_SHAPE = (32, 32, 4)  # To match paper at page 14
 LATENT_DIM = np.prod(LATENT_SHAPE)
 # Cheap proxy FID settings
-FID_K = 1000  #  FID-1K proxy
-FID_BATCH_SIZE = 32
+FID_K = 1000  # FID-1K proxy
+FID_BATCH_SIZE = 8
 
 
 @dataclass
