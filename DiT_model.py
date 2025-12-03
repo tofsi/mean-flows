@@ -254,7 +254,7 @@ class DiT(nn.Module):
 
         # Label embeddings (CFG dropout handled inside)
         y_emb = LabelEmbed(
-            self.hidden_dim, self.num_classes, drop_prob=0.1, name="label_embed"
+            self.hidden_dim, self.num_classes, drop_prob=0.0, name="label_embed"
         )(
             y, train=train
         )  # (B, D)
