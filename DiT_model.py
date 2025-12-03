@@ -43,7 +43,7 @@ class LabelEmbed(nn.Module):
 
     hidden_dim: int
     num_classes: int
-    drop_prob: float = 0.1  # probability of dropping labels
+    drop_prob: float = 0.0  # probability of dropping labels
 
     @nn.compact
     def __call__(self, labels, train: bool = True):
