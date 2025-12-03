@@ -341,7 +341,7 @@ def main():
     ap.add_argument(
         "--final_fid_k",
         type=int,
-        default=50000,
+        default=1000,
         help="Compute and record final FID-K after training (0 to skip).",
     )
     ap.add_argument(

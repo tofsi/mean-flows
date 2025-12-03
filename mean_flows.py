@@ -13,15 +13,19 @@ from jax import random
 from flax import nnx
 
 T = jnp.float32  # global dtype
-_c = T(1e-3)  # Used for avoiding division by zero in loss computation.
+_c = T(1e-6)  # Used for avoiding division by zero in loss computation.
 _drop_probability = T(0.1)
 
 
 @partial(jax.jit, static_argnums=(1,))
 def metric(error, p):
     # Weighted square loss, see appendix B.2 Loss Metrics
-    losses = jnp.sum(jnp.square(error), axis=1)
+    B = error.shape[0]
+    error_flat = error.reshape(B, -1) 
+    losses = jnp.mean(jnp.square(error_flat), axis=1)
     weights = jax.lax.stop_gradient(jnp.pow(losses + _c, -p))
+    # Normalize weights to preserve scale
+    weights = weights / jnp.mean(weights)
     return jnp.mean(weights * losses)
 
 
@@ -152,8 +156,8 @@ def algorithm_1(
             (z, r, t),
             (
                 v,
-                jvp_computation_option[0] + jnp.zeros_like(r),
-                jvp_computation_option[1] + jnp.zeros_like(t),
+                jnp.ones_like(r) if jvp_computation_option[0] else jnp.zeros_like(r), #jvp_computation_option[0] + jnp.zeros_like(r),
+                jnp.ones_like(t) if jvp_computation_option[1] else jnp.zeros_like(t), #jvp_computation_option[1] + jnp.zeros_like(t),
             ),
         )
         u_tgt = v - (t - r)[:, None] * dudt  # (B, D)

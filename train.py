@@ -29,8 +29,8 @@ IMAGENET_ROOT = PROJECT_DIR / "imagenet"
 LATENT_SHAPE = (32, 32, 4)  # To match paper at page 14
 LATENT_DIM = np.prod(LATENT_SHAPE)
 # Cheap proxy FID settings
-FID_K = 1000  # FID-1K proxy
-FID_BATCH_SIZE = 8
+FID_K = 50  # FID-1K proxy
+FID_BATCH_SIZE = 10
 
 
 @dataclass
@@ -136,9 +136,9 @@ class Trainer:
         train_loader, val_loader = get_dataloaders_extracted(
             root_dir=str(IMAGENET_ROOT),  # your extracted folder
             batch_size=16,  # NOTE: Increase batch size relative to GPU memory.
-            num_workers=4,
-            max_train_samples=5000,
-            max_val_samples=500,
+            num_workers=2,
+            # max_train_samples=8,
+            # max_val_samples=4,
         )
         # ---------- 2. Initialize / restore training state ----------
         ckpt_dir = self.checkpoint_dir
@@ -206,44 +206,62 @@ class Trainer:
                 # latents_np = self.vae_tokenizer.encode_images_to_latents(images)
                 # x = jnp.array(latents_np)  # Convert to JAX array
                 y = jnp.array(labels, dtype=jnp.int32)
-                key, subkey, dropout_key = jax.random.split(key, 3)
+                key, subkey = jax.random.split(key, 2)
 
-                loss, grads = jax.value_and_grad(algorithm_1, argnums=1)(
-                    lambda vars, x, tr, y: self.fn_apply(vars, x, tr, y, dropout_key),
-                    params,
-                    x,
-                    y,
-                    subkey,
-                    self.trainingParams.ratio_r_not_eq_t,
-                    self.trainingParams.time_sampler_name,
-                    self.trainingParams.time_sampler_params,
-                    self.trainingParams.p,
-                    self.trainingParams.omega,
-                    self.trainingParams.embed_t_r,
-                    self.trainingParams.jvp_computation,
-                )
+                @jax.jit 
+                def compute_loss_and_grads(params, x, y, key):
+                    subkey, dropout_key = jax.random.split(key, 2)
+
+                    def fn_for_algo1(vars_dict, x, tr, y):
+                        return self.model.apply(
+                            vars_dict,
+                            x,
+                            tr,
+                            y,
+                            train=True,
+                            method=self.model.forward,
+                            rngs={"dropout": dropout_key},
+                        )
+
+                    loss, grads = jax.value_and_grad(algorithm_1, argnums=1)(
+                        fn_for_algo1, # lambda vars, x, tr, y: self.fn_apply(vars, x, tr, y, dropout_key),
+                        params,
+                        x,
+                        y,
+                        subkey,
+                        self.trainingParams.ratio_r_not_eq_t,
+                        self.trainingParams.time_sampler_name,
+                        self.trainingParams.time_sampler_params,
+                        self.trainingParams.p,
+                        self.trainingParams.omega,
+                        self.trainingParams.embed_t_r,
+                        self.trainingParams.jvp_computation,
+                    )
+                    return loss, grads
+                loss, grads = compute_loss_and_grads(params, x, y, subkey)
                 updates, opt_state = optimizer.update(grads, opt_state)
                 params = optax.apply_updates(params, updates)
                 epoch_losses.append(float(loss))
                 global_step += 1
-                if batch_idx % 100 == 0:
-                    print(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss}")
+                if batch_idx % 16 == 0:
+                    # Check gradient norm for debugging
+                    grad_norm = jnp.sqrt(sum(jnp.sum(jnp.square(g)) for g in jax.tree_util.tree_leaves(grads)))
+                    print(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss}, Grad norm: {grad_norm:.6f}")
 
             print(f"Epoch {epoch} completed")
             # ---- end of epoch: compute mean loss ----
             mean_loss = float(np.mean(epoch_losses))
-            # Do FID-k once per epoch
-            fid_proxy = self.eval_fid(params, FID_K, FID_BATCH_SIZE)
+            # fid_proxy = self.eval_fid(params, FID_K, FID_BATCH_SIZE)
             epoch_time = time.time() - t0
             print(
-                f"[epoch {epoch}] mean_loss={mean_loss:.4f}  FID-{FID_K}={fid_proxy:.3f}  time={epoch_time/60:.1f}m"
+                f"[epoch {epoch}] mean_loss={mean_loss:.4f}  time={epoch_time/60:.1f}m"
             )
             # ---- save params + metrics (overwrites params, appends metrics) ----
             metrics = {
                 "epoch": epoch,
                 "global_step": global_step,
                 "mean_loss": mean_loss,
-                f"fid_{FID_K}": fid_proxy,
+                # f"fid_{FID_K}": fid_proxy,
                 "epoch_time_sec": epoch_time,
             }
             state = {
@@ -254,9 +272,10 @@ class Trainer:
                 "key": key,
             }
             self.save_checkpoint_and_metrics(state, epoch, metrics)
+            
         return params
 
-    def generate_samples(self, params, num_samples=50_000, batch_size=128):
+    def generate_samples(self, params, num_samples=1000, batch_size=100):
         """
         Generates decoded RGB images using:
             - trained DiT params
@@ -321,7 +340,7 @@ class Trainer:
 
             yield imgs_np
 
-    def eval_fid(self, trained_params, num_samples=5000, batch_size=64):
+    def eval_fid(self, trained_params, num_samples=1000, batch_size=100):
         batch_size = min(batch_size, num_samples)
 
         feats_fake = []
