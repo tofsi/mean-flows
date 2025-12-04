@@ -11,6 +11,8 @@ import flax.linen as nn
 import optax
 from dataclasses import dataclass, field
 from typing import Tuple, Callable, Optional, Any, Dict
+import pickle
+
 
 from prepare_imagenet import get_dataloaders, get_dataloaders_extracted
 from VAE_tokenizer import (
@@ -127,6 +129,31 @@ class Trainer:
             b1=self.trainingParams.beta1,
             b2=self.trainingParams.beta2,
         )
+        
+    def load_checkpoint(self):
+        """Load checkpoint using orbax"""
+        meta_path = os.path.join(self.checkpoint_dir, "latest.json")
+        
+        if not os.path.exists(meta_path):
+            return None
+        
+        with open(meta_path, 'r') as f:
+            meta = json.load(f)
+        
+        checkpoint_path = meta['checkpoint_path']
+        
+        if not os.path.exists(checkpoint_path):
+            print(f"[Trainer] Checkpoint path {checkpoint_path} not found")
+            return None
+        
+        checkpointer = ocp.PyTreeCheckpointer()
+        
+        # Restore with empty template (orbax figures out structure)
+        restored = checkpointer.restore(checkpoint_path)
+        
+        print(f"[Trainer] Loaded checkpoint from {checkpoint_path}")
+        return restored
+    
 
     def train(self):
         """Main training loop."""
@@ -135,8 +162,8 @@ class Trainer:
         # train_loader, test_loader = get_dataloaders(batch_size=32)
         train_loader, val_loader = get_dataloaders_extracted(
             root_dir=str(IMAGENET_ROOT),  # your extracted folder
-            batch_size=16,  # NOTE: Increase batch size relative to GPU memory.
-            num_workers=2,
+            batch_size=64,  # NOTE: Increase batch size relative to GPU memory.
+            num_workers=14,
             # max_train_samples=8,
             # max_val_samples=4,
         )
@@ -153,7 +180,7 @@ class Trainer:
 
         if self.resume_from_checkpoints:
             # This will load the latest checkpoint in self.checkpoint_dir
-            restored = checkpoints.restore_checkpoint(self.checkpoint_dir, target=None)
+            restored = self.load_checkpoint()
             if restored is not None:
                 print(f"[Trainer] Resumed full state from {ckpt_dir}")
                 params = restored.get("params")
@@ -374,23 +401,30 @@ class Trainer:
 
     def save_checkpoint_and_metrics(self, state, epoch, metrics):
         """
-        state: dict with keys like:
-            'params', 'opt_state', 'epoch', 'global_step', 'key'
+        Properly save checkpoint with orbax (handles optax state correctly)
         """
         self.checkpoint_dir = os.path.abspath(self.checkpoint_dir)
         os.makedirs(self.checkpoint_dir, exist_ok=True)
-
-        checkpoints.save_checkpoint(
-            ckpt_dir=self.checkpoint_dir,
-            target=state,
-            step=epoch,
-            overwrite=True,
-            keep=1,  # keep only latest
-        )
-
+        
+        # Use orbax checkpointer (better for complex pytrees)
+        checkpointer = ocp.PyTreeCheckpointer()
+        
+        checkpoint_path = os.path.join(self.checkpoint_dir, f"checkpoint_{epoch}")
+        
+        # Save the full state
+        checkpointer.save(checkpoint_path, state, force=True)
+        
+        # Save a metadata file to track latest
+        meta_path = os.path.join(self.checkpoint_dir, "latest.json")
+        with open(meta_path, 'w') as f:
+            json.dump({'latest_epoch': epoch, 'checkpoint_path': checkpoint_path}, f)
+        
+        # Save metrics
         metrics_path = os.path.join(self.checkpoint_dir, "metrics.jsonl")
         with open(metrics_path, "a") as f:
             f.write(json.dumps(metrics) + "\n")
+        
+        print(f"[Checkpoint] Saved epoch {epoch} to {checkpoint_path}")
 
 
 if __name__ == "__main__":

@@ -42,7 +42,7 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 from pathlib import Path
 
 from ablation_configs import ABLATIONS
-import torch.multiprocessing as mp
+import multiprocessing as mp
 
 mp.set_start_method("spawn", force=True)
 from train import TrainingParams, Trainer
