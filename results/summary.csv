@@ -1,0 +1,2 @@
+architecture,beta1,beta2,ema_decay,embed_t_r_name,epochs,final_fid,jvp_tangent,lr,omega,p,ratio_r_not_eq_t,run_dir,sweep_key,sweep_val,time_sampler_params
+DiT-B-4,0.9,0.95,0.9999,t_tr,10,126.31321716308594,"(v,0,1)",0.0001,1.0,1.0,0.25,runs/ablations/single,,,-0.4_1.0

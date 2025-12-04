@@ -263,8 +263,6 @@ def run_one(
 
     done_file = run_dir / "DONE"
     final_fid_file = run_dir / "final_fid.json"
-    done_file = run_dir / "DONE"
-    final_fid_file = run_dir / "final_fid.json"
 
     # Case 1: training already finished for this config
     if done_file.exists():
