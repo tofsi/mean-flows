@@ -12,7 +12,7 @@ import optax
 from dataclasses import dataclass, field
 from typing import Tuple, Callable, Optional, Any, Dict
 import pickle
-
+#import orbax.checkpoint as ocp
 
 from prepare_imagenet import get_dataloaders, get_dataloaders_extracted
 from VAE_tokenizer import (
@@ -131,7 +131,7 @@ class Trainer:
         )
         
     def load_checkpoint(self):
-        """Load checkpoint using orbax"""
+        """Load using pickle"""
         meta_path = os.path.join(self.checkpoint_dir, "latest.json")
         
         if not os.path.exists(meta_path):
@@ -146,14 +146,11 @@ class Trainer:
             print(f"[Trainer] Checkpoint path {checkpoint_path} not found")
             return None
         
-        checkpointer = ocp.PyTreeCheckpointer()
-        
-        # Restore with empty template (orbax figures out structure)
-        restored = checkpointer.restore(checkpoint_path)
+        with open(checkpoint_path, 'rb') as f:
+            restored = pickle.load(f)
         
         print(f"[Trainer] Loaded checkpoint from {checkpoint_path}")
         return restored
-    
 
     def train(self):
         """Main training loop."""
@@ -222,6 +219,7 @@ class Trainer:
             params = variables["params"]
             optimizer = self.adam_optimizer()
             opt_state = optimizer.init(params)
+            
 
         # 3. Training loop
         for epoch in range(start_epoch, self.trainingParams.epochs):
@@ -400,21 +398,17 @@ class Trainer:
         return float(fid_value)
 
     def save_checkpoint_and_metrics(self, state, epoch, metrics):
-        """
-        Properly save checkpoint with orbax (handles optax state correctly)
-        """
+        """Save using pickle (simpler, more reliable)"""
         self.checkpoint_dir = os.path.abspath(self.checkpoint_dir)
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         
-        # Use orbax checkpointer (better for complex pytrees)
-        checkpointer = ocp.PyTreeCheckpointer()
+        checkpoint_path = os.path.join(self.checkpoint_dir, f"checkpoint_{epoch}.pkl")
         
-        checkpoint_path = os.path.join(self.checkpoint_dir, f"checkpoint_{epoch}")
+        # Save with pickle
+        with open(checkpoint_path, 'wb') as f:
+            pickle.dump(state, f)
         
-        # Save the full state
-        checkpointer.save(checkpoint_path, state, force=True)
-        
-        # Save a metadata file to track latest
+        # Track latest
         meta_path = os.path.join(self.checkpoint_dir, "latest.json")
         with open(meta_path, 'w') as f:
             json.dump({'latest_epoch': epoch, 'checkpoint_path': checkpoint_path}, f)
@@ -424,7 +418,8 @@ class Trainer:
         with open(metrics_path, "a") as f:
             f.write(json.dumps(metrics) + "\n")
         
-        print(f"[Checkpoint] Saved epoch {epoch} to {checkpoint_path}")
+        print(f"[Checkpoint] Saved epoch {epoch}")
+
 
 
 if __name__ == "__main__":
