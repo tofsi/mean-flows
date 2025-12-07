@@ -184,7 +184,7 @@ def algorithm_1(
             v_tilde = omega * v + (1.0 - omega) * u_diag
         u, dudt = jax.jvp(
             fn_z_r_t,
-            (z, r, t),
+            (z, t, t),
             (
                 v_tilde,
                 jnp.ones_like(r) if jvp_computation_option[0] else jnp.zeros_like(r), #jvp_computation_option[0] + jnp.zeros_like(r),
