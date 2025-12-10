@@ -255,6 +255,7 @@ def get_dataloaders_extracted(
     val_subdir: str = "val",  # or "test" if you only have test extracted
     max_train_samples=None,
     max_val_samples=None,
+    return_val = False
 ) -> Tuple[DataLoader, DataLoader]:
     """
     Use this when ImageNet is ALREADY extracted.
@@ -338,16 +339,18 @@ def get_dataloaders_extracted(
         persistent_workers=(num_workers > 0),
         drop_last=True,
     )
+    val_loader = None
+    if return_val:
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=True,
+            persistent_workers=(num_workers > 0),
+            drop_last=False,
+        )
 
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True,
-        persistent_workers=(num_workers > 0),
-        drop_last=False,
-    )
 
     print(
         f"[ImageNet extracted] train={len(train_dataset)} images, val={len(val_dataset)} images"

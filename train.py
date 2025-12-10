@@ -27,6 +27,8 @@ from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent
 IMAGENET_ROOT = PROJECT_DIR / "imagenet"
+TRAIN_DIR = "train"
+VAL_DIR = "val"
 
 LATENT_SHAPE = (32, 32, 4)  # To match paper at page 14
 LATENT_DIM = np.prod(LATENT_SHAPE)
@@ -161,6 +163,9 @@ class Trainer:
             root_dir=str(IMAGENET_ROOT),  # your extracted folder
             batch_size=64,  # NOTE: Increase batch size relative to GPU memory.
             num_workers=14,
+            train_subdir = TRAIN_DIR,
+            val_subdir = VAL_DIR,
+            return_val = False
             # max_train_samples=8,
             # max_val_samples=4,
         )
