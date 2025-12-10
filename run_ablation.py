@@ -298,11 +298,14 @@ def run_one(
 
         final_fid = None
         if final_fid_k and final_fid_k > 0:
+            print(f"computing FID-1K value")
             final_fid = trainer.eval_fid(trained_params, num_samples=final_fid_k)
+            print(f"FID-1K value is : {final_fid}")
 
         # save final fid explicitly
         with open("final_fid.json", "w") as f:
             json.dump({"final_fid_k": final_fid_k, "final_fid": final_fid}, f, indent=2)
+            print(f"Saved FID-1K value to {final_fid} file")
 
     finally:
         os.chdir(old_cwd)
