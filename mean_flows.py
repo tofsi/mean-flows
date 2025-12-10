@@ -21,7 +21,7 @@ _drop_probability = T(0.1)
 def metric(error, p):
     # Weighted square loss, see appendix B.2 Loss Metrics
     B = error.shape[0]
-    error_flat = error.reshape(B, -1) 
+    error_flat = error.reshape(B, -1)
     losses = jnp.mean(jnp.square(error_flat), axis=1)
     weights = jax.lax.stop_gradient(jnp.pow(losses + _c, -p))
     # Normalize weights to preserve scale
@@ -97,6 +97,7 @@ def algorithm_1(
     sampler_args: Optional[Tuple[float, float]],
     p,
     omega: Optional[float],
+    num_classes: Optional[int],
     embed_t_r=lambda t, r: (t, r),
     jvp_computation_option=(False, True),
 ):
@@ -156,8 +157,12 @@ def algorithm_1(
             (z, r, t),
             (
                 v,
-                jnp.ones_like(r) if jvp_computation_option[0] else jnp.zeros_like(r), #jvp_computation_option[0] + jnp.zeros_like(r),
-                jnp.ones_like(t) if jvp_computation_option[1] else jnp.zeros_like(t), #jvp_computation_option[1] + jnp.zeros_like(t),
+                (
+                    jnp.ones_like(r) if jvp_computation_option[0] else jnp.zeros_like(r)
+                ),  # jvp_computation_option[0] + jnp.zeros_like(r),
+                (
+                    jnp.ones_like(t) if jvp_computation_option[1] else jnp.zeros_like(t)
+                ),  # jvp_computation_option[1] + jnp.zeros_like(t),
             ),
         )
         u_tgt = v - (t - r)[:, None] * dudt  # (B, D)
@@ -166,8 +171,8 @@ def algorithm_1(
     else:
         drop_mask = random.bernoulli(k_cfg, p=_drop_probability, shape=(t.shape[0],))
         c_some_unconditional = jnp.where(
-            drop_mask, 0, c
-        )  # We use the convention c == 0 means no class.
+            drop_mask, num_classes, c
+        )  # We use the convention c == num_classes means no class.
 
         def fn_z_r_t(z_, r_, t_):
             return fn(
