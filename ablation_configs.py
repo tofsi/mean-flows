@@ -42,4 +42,5 @@ ABLATIONS = {
     },
     "p": {"values": [0.0, 0.5, 1.0, 1.5, 2.0]},
     "omega": {"values": [1.0, 1.5, 2.0, 3.0, 5.0]},
+    "architecture" : {"values": ["DiT-B-2", "DiT-M-2", "DiT-L-2"]},
 }

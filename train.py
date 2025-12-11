@@ -31,7 +31,7 @@ IMAGENET_ROOT = PROJECT_DIR / "imagenet"
 LATENT_SHAPE = (32, 32, 4)  # To match paper at page 14
 LATENT_DIM = np.prod(LATENT_SHAPE)
 # Cheap proxy FID settings
-FID_K = 50  # FID-1K proxy
+FID_K = 1000  # FID-1K proxy
 FID_BATCH_SIZE = 10
 
 
@@ -276,17 +276,17 @@ class Trainer:
             print(f"Epoch {epoch} completed")
             # ---- end of epoch: compute mean loss ----
             mean_loss = float(np.mean(epoch_losses))
-            # fid_proxy = self.eval_fid(params, FID_K, FID_BATCH_SIZE)
+            fid_proxy = self.eval_fid(params, FID_K, FID_BATCH_SIZE)
             epoch_time = time.time() - t0
             print(
-                f"[epoch {epoch}] mean_loss={mean_loss:.4f}  time={epoch_time/60:.1f}m"
+                f"[epoch {epoch}] mean_loss={mean_loss:.4f}  fid= {fid_proxy:.4f} time={epoch_time/60:.1f}m"
             )
             # ---- save params + metrics (overwrites params, appends metrics) ----
             metrics = {
                 "epoch": epoch,
                 "global_step": global_step,
                 "mean_loss": mean_loss,
-                # f"fid_{FID_K}": fid_proxy,
+                "fid_1k": fid_proxy,
                 "epoch_time_sec": epoch_time,
             }
             state = {
