@@ -12,7 +12,8 @@ import optax
 from dataclasses import dataclass, field
 from typing import Tuple, Callable, Optional, Any, Dict
 import pickle
-#import orbax.checkpoint as ocp
+
+# import orbax.checkpoint as ocp
 
 from prepare_imagenet import get_dataloaders, get_dataloaders_extracted
 from VAE_tokenizer import (
@@ -27,6 +28,8 @@ from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent
 IMAGENET_ROOT = PROJECT_DIR / "imagenet"
+TRAIN_DIR = "train"
+VAL_DIR = "val"
 
 LATENT_SHAPE = (32, 32, 4)  # To match paper at page 14
 LATENT_DIM = np.prod(LATENT_SHAPE)
@@ -129,26 +132,26 @@ class Trainer:
             b1=self.trainingParams.beta1,
             b2=self.trainingParams.beta2,
         )
-        
+
     def load_checkpoint(self):
         """Load using pickle"""
         meta_path = os.path.join(self.checkpoint_dir, "latest.json")
-        
+
         if not os.path.exists(meta_path):
             return None
-        
-        with open(meta_path, 'r') as f:
+
+        with open(meta_path, "r") as f:
             meta = json.load(f)
-        
-        checkpoint_path = meta['checkpoint_path']
-        
+
+        checkpoint_path = meta["checkpoint_path"]
+
         if not os.path.exists(checkpoint_path):
             print(f"[Trainer] Checkpoint path {checkpoint_path} not found")
             return None
-        
-        with open(checkpoint_path, 'rb') as f:
+
+        with open(checkpoint_path, "rb") as f:
             restored = pickle.load(f)
-        
+
         print(f"[Trainer] Loaded checkpoint from {checkpoint_path}")
         return restored
 
@@ -161,6 +164,9 @@ class Trainer:
             root_dir=str(IMAGENET_ROOT),  # your extracted folder
             batch_size=64,  # NOTE: Increase batch size relative to GPU memory.
             num_workers=14,
+            train_subdir = TRAIN_DIR,
+            val_subdir = VAL_DIR,
+            return_val = False
             # max_train_samples=8,
             # max_val_samples=4,
         )
@@ -219,7 +225,6 @@ class Trainer:
             params = variables["params"]
             optimizer = self.adam_optimizer()
             opt_state = optimizer.init(params)
-            
 
         # 3. Training loop
         for epoch in range(start_epoch, self.trainingParams.epochs):
@@ -233,7 +238,7 @@ class Trainer:
                 y = jnp.array(labels, dtype=jnp.int32)
                 key, subkey = jax.random.split(key, 2)
 
-                @jax.jit 
+                @jax.jit
                 def compute_loss_and_grads(params, x, y, key):
                     subkey, dropout_key = jax.random.split(key, 2)
 
@@ -249,7 +254,7 @@ class Trainer:
                         )
 
                     loss, grads = jax.value_and_grad(algorithm_1, argnums=1)(
-                        fn_for_algo1, # lambda vars, x, tr, y: self.fn_apply(vars, x, tr, y, dropout_key),
+                        fn_for_algo1,  # lambda vars, x, tr, y: self.fn_apply(vars, x, tr, y, dropout_key),
                         params,
                         x,
                         y,
@@ -259,10 +264,12 @@ class Trainer:
                         self.trainingParams.time_sampler_params,
                         self.trainingParams.p,
                         self.trainingParams.omega,
+                        self.model.num_classes,
                         self.trainingParams.embed_t_r,
                         self.trainingParams.jvp_computation,
                     )
                     return loss, grads
+
                 loss, grads = compute_loss_and_grads(params, x, y, subkey)
                 updates, opt_state = optimizer.update(grads, opt_state)
                 params = optax.apply_updates(params, updates)
@@ -270,8 +277,15 @@ class Trainer:
                 global_step += 1
                 if batch_idx % 16 == 0:
                     # Check gradient norm for debugging
-                    grad_norm = jnp.sqrt(sum(jnp.sum(jnp.square(g)) for g in jax.tree_util.tree_leaves(grads)))
-                    print(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss}, Grad norm: {grad_norm:.6f}")
+                    grad_norm = jnp.sqrt(
+                        sum(
+                            jnp.sum(jnp.square(g))
+                            for g in jax.tree_util.tree_leaves(grads)
+                        )
+                    )
+                    print(
+                        f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss}, Grad norm: {grad_norm:.6f}"
+                    )
 
             print(f"Epoch {epoch} completed")
             # ---- end of epoch: compute mean loss ----
@@ -297,7 +311,7 @@ class Trainer:
                 "key": key,
             }
             self.save_checkpoint_and_metrics(state, epoch, metrics)
-            
+
         return params
 
     def generate_samples(self, params, num_samples=1000, batch_size=100):
@@ -401,25 +415,24 @@ class Trainer:
         """Save using pickle (simpler, more reliable)"""
         self.checkpoint_dir = os.path.abspath(self.checkpoint_dir)
         os.makedirs(self.checkpoint_dir, exist_ok=True)
-        
+
         checkpoint_path = os.path.join(self.checkpoint_dir, f"checkpoint_{epoch}.pkl")
-        
+
         # Save with pickle
-        with open(checkpoint_path, 'wb') as f:
+        with open(checkpoint_path, "wb") as f:
             pickle.dump(state, f)
-        
+
         # Track latest
         meta_path = os.path.join(self.checkpoint_dir, "latest.json")
-        with open(meta_path, 'w') as f:
-            json.dump({'latest_epoch': epoch, 'checkpoint_path': checkpoint_path}, f)
-        
+        with open(meta_path, "w") as f:
+            json.dump({"latest_epoch": epoch, "checkpoint_path": checkpoint_path}, f)
+
         # Save metrics
         metrics_path = os.path.join(self.checkpoint_dir, "metrics.jsonl")
         with open(metrics_path, "a") as f:
             f.write(json.dumps(metrics) + "\n")
-        
-        print(f"[Checkpoint] Saved epoch {epoch}")
 
+        print(f"[Checkpoint] Saved epoch {epoch}")
 
 
 if __name__ == "__main__":
