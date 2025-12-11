@@ -85,7 +85,7 @@ def p_0(key, batch_size, dim, dtype=T):
 # ===== Batched Algorithm 1: returns mean loss and per-sample losses =====
 
 
-@partial(jax.jit, static_argnums=(0, 5, 6, 7, 8, 9, 10, 11))
+@partial(jax.jit, static_argnums=(0, 5, 6, 7, 8, 9, 10, 11, 12))
 def algorithm_1(
     fn,
     params,
