@@ -28,8 +28,8 @@ from pathlib import Path
 
 PROJECT_DIR = Path(__file__).resolve().parent
 IMAGENET_ROOT = PROJECT_DIR / "imagenet"
-TRAIN_DIR = "train_5000"
-VAL_DIR = "val_500"
+TRAIN_DIR = "train"
+VAL_DIR = "val"
 
 LATENT_SHAPE = (32, 32, 4)  # To match paper at page 14
 LATENT_DIM = np.prod(LATENT_SHAPE)
@@ -334,6 +334,7 @@ class Trainer:
             x = x_flat.reshape(B, *LATENT_SHAPE)
 
             # If unconditional: use null class = num_classes
+            # TODO: Consistent unconditional convention. I think 0 should be used?
             if y is None:
                 y = jnp.full((B,), fill_value=self.model.num_classes)
 
