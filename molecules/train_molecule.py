@@ -19,9 +19,6 @@ from typing import Tuple, Callable, Optional, Any, Dict
 import pickle
 from mean_flows import algorithm_1, algorithm_2
 
-BATCH_SIZE = 64
-
-
 class MoleculeLatentDataset:
     """
     Simple iterable that yields (latent_batch, dummy_label_batch) for molecule training.
@@ -52,7 +49,7 @@ class MoleculeTrainer(Trainer):
         trainingParams: TrainingParams,
         latent_path: str,
         checkpoint_dir: str = "checkpoints_mol",
-        resume_from_checkpoints: bool = False,
+        resume_from_checkpoints: bool = True,
     ):
         self.trainingParams = trainingParams
         self.latent_path = latent_path
@@ -87,24 +84,25 @@ class MoleculeTrainer(Trainer):
         train_loader = MoleculeLatentDataset(self.molecule_latents, self._batch_size)
 
         # 2. Init or restore params
-        key = jax.random.PRNGKey(0)
+        key = jax.random.PRNGKey(42)
         optimizer = self.adam_optimizer()
+        start_epoch = 0
+        global_step = 0
         start_from_scratch = not self.resume_from_checkpoints
         if self.resume_from_checkpoints:
             restored = self.load_checkpoint()
             if restored is not None:
-                params = restored["params"]
-                opt_state = restored["opt_state"]
-                start_epoch = (
-                    json.load(open(os.path.join(self.checkpoint_dir, "latest.json")))[
-                        "latest_epoch"
-                    ]
-                    + 1
-                )
+                print(f"[MoleculeTrainer] Resumed full state from {self.checkpoint_dir}")
+                params = restored.get("params")
+                opt_state = restored.get("opt_state")
+                global_step = int(restored.get("global_step", 0))
+                # resume from next epoch
+                start_epoch = int(restored.get("epoch", 0)) + 1
+                key = restored.get("key", key)
             else:
                 start_from_scratch = True
+                print(f"[MoleculeTrainer][Warning] Failed to restore state from {self.checkpoint_dir}")
         if start_from_scratch:
-            start_epoch = 0
             key, key_params = jax.random.split(key)
             dummy_x = jnp.zeros((1, 56), dtype=jnp.float32)
             dummy_t = jnp.ones((1,), dtype=jnp.float32)
@@ -157,12 +155,13 @@ class MoleculeTrainer(Trainer):
                         self.trainingParams.jvp_computation,
                     )
                     return loss, grads
+                
 
                 loss, grads = compute_loss_and_grads(params, x, y, subkey)
                 updates, opt_state = optimizer.update(grads, opt_state)
                 params = optax.apply_updates(params, updates)
                 epoch_losses.append(float(loss))
-
+                global_step += 1
                 if batch_idx % 16 == 0:
                     grad_norm = jnp.sqrt(
                         sum(
@@ -180,12 +179,23 @@ class MoleculeTrainer(Trainer):
             print(
                 f"[MoleculeTrainer] epoch {epoch}  mean_loss={mean_loss:.4f}  time={epoch_time/60:.1f}m"
             )
-
-            self.save_checkpoint(
+            state = {
+                "params": params,
+                "opt_state": opt_state,
+                "epoch": epoch,
+                "global_step": global_step,
+                "key": key,
+            }
+            metrics = {
+                "epoch": epoch,
+                "global_step": global_step,
+                "mean_loss": mean_loss,
+                "epoch_time_sec": epoch_time,
+            }
+            self.save_checkpoint_and_metrics(
+                state,
                 epoch,
-                params,
-                opt_state,
-                metrics={"epoch": epoch, "mean_loss": mean_loss},
+                metrics,
             )
         return params
 
@@ -208,6 +218,6 @@ if __name__ == "__main__":
         time_sampler_params=None,
     )
 
-    latent_path = "molecules/vae_qm9/qvae/latent_vectors_sample.npz"
+    latent_path = "vae_qm9/qvae/latent_vectors_sample.npz"
     trainer = MoleculeTrainer(trainingParams, latent_path)
     trained_params = trainer.train()
