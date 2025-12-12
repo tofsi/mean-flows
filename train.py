@@ -288,17 +288,17 @@ class Trainer:
             print(f"Epoch {epoch} completed")
             # ---- end of epoch: compute mean loss ----
             mean_loss = float(np.mean(epoch_losses))
-            fid_proxy = self.eval_fid(params, FID_K, FID_BATCH_SIZE)
+            #fid_proxy = self.eval_fid(params, FID_K, FID_BATCH_SIZE)
             epoch_time = time.time() - t0
             print(
-                f"[epoch {epoch}] mean_loss={mean_loss:.4f}  fid= {fid_proxy:.4f} time={epoch_time/60:.1f}m"
+                f"[epoch {epoch}] mean_loss={mean_loss:.4f} time={epoch_time/60:.1f}m"
             )
             # ---- save params + metrics (overwrites params, appends metrics) ----
             metrics = {
                 "epoch": epoch,
                 "global_step": global_step,
                 "mean_loss": mean_loss,
-                "fid_1k": fid_proxy,
+                #"fid_1k": fid_proxy,
                 "epoch_time_sec": epoch_time,
             }
             state = {
