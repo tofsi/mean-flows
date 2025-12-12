@@ -115,7 +115,7 @@ def algorithm_1(
       sampler_args: If None, uniform(0, 1) sampling. Elseif (a, b), logit-normal(a, b)
       p: Loss weighting coefficient (see appendix B.2 in the paper for details)
       positional_embedding : function, Choice of positional embedding of t and r
-      omega : float between 0 and 1, degree of CFG. If none, classifier-free guidance is not applied (see section 4.2, Mean Flows with Guidance)
+      omega : float greater than 1, degree of CFG. If none, classifier-free guidance is not applied (see section 4.2, Mean Flows with Guidance)
     Returns:
       mean_loss: scalar
       embed_t_r : function from t, r to some tuple of functions of t, r, specifying the positional embedding. See table 1c for examples.
@@ -185,11 +185,12 @@ def algorithm_1(
         if omega == 1.0:
             v_tilde = v
         else:
-            u_diag = fn_z_r_t(z, r, t)
+            u_diag = fn_z_r_t(z, t, t)
             v_tilde = omega * v + (1.0 - omega) * u_diag
+            
         u, dudt = jax.jvp(
             fn_z_r_t,
-            (z, t, t),
+            (z, r, t),
             (
                 v_tilde,
                 jnp.ones_like(r) if jvp_computation_option[0] else jnp.zeros_like(r), #jvp_computation_option[0] + jnp.zeros_like(r),
