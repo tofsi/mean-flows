@@ -13,8 +13,6 @@ from dataclasses import dataclass, field
 from typing import Tuple, Callable, Optional, Any, Dict
 import pickle
 
-# import orbax.checkpoint as ocp
-
 from prepare_imagenet import get_dataloaders, get_dataloaders_extracted
 from VAE_tokenizer import (
     VAETokenizer,
