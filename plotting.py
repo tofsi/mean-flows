@@ -30,11 +30,6 @@ def plot_scalability(
     
     # Architecture ordering and styling
     arch_order = ["B/2", "M/2", "L/2"]
-    arch_params = {
-        "B/2": "131M",
-        "M/2": "308M", 
-        "L/2": "459M"
-    }
     
     # Color scheme matching the paper's figure
     colors = {
@@ -125,25 +120,11 @@ def plot_scalability(
     legend_labels = [f"{name}" for name in arch_order if name in final_points]
     ax.legend(
         legend_labels,
-        loc='upper right',
+        loc='upper left',
         framealpha=0.95,
         fontsize=11,
         title='Architecture',
         title_fontsize=11
-    )
-    
-    param_text = "\n".join([
-        f"{name}: {arch_params[name]}" 
-        for name in arch_order 
-        if name in final_points
-    ])
-    ax.text(
-        0.02, 0.98, 
-        param_text,
-        transform=ax.transAxes,
-        fontsize=9,
-        verticalalignment='top',
-        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor='gray')
     )
     
     # Adjust layout and save
