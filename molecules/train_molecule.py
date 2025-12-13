@@ -42,7 +42,7 @@ class MoleculeLatentDataset:
 
 class MoleculeTrainer(Trainer):
     trainingParams: TrainingParams
-    _batch_size = 64
+    _batch_size = 128
 
     def __init__(
         self,
@@ -203,7 +203,7 @@ class MoleculeTrainer(Trainer):
 if __name__ == "__main__":
     trainingParams = TrainingParams(
         architecture="Mol-DiT-B",
-        epochs=10,
+        epochs=20,
         lr=1e-4,
         beta1=0.9,
         beta2=0.95,

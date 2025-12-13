@@ -201,7 +201,7 @@ def MoleculeDiT_B():
     """
     return MoleculeDiT(
         depth=6,
-        hidden_dim=256,
+        hidden_dim=512,
         num_heads=4,
         latent_dim=56,
         n_tokens=2,
