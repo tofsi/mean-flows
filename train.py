@@ -161,7 +161,7 @@ class Trainer:
         train_loader, val_loader = get_dataloaders_extracted(
             root_dir=str(IMAGENET_ROOT),  # your extracted folder
             batch_size=64,  # NOTE: Increase batch size relative to GPU memory.
-            num_workers=14,
+            num_workers=31,
             train_subdir = TRAIN_DIR,
             val_subdir = VAL_DIR,
             return_val = False
@@ -312,7 +312,7 @@ class Trainer:
 
         return params
 
-    def generate_samples(self, params, num_samples=1000, batch_size=100):
+    def generate_samples(self, params, num_samples=1000, batch_size=100, seed=0, c=None):
         """
         Generates decoded RGB images using:
             - trained DiT params
@@ -332,7 +332,6 @@ class Trainer:
             x = x_flat.reshape(B, *LATENT_SHAPE)
 
             # If unconditional: use null class = num_classes
-            # TODO: Consistent unconditional convention. I think 0 should be used?
             if y is None:
                 y = jnp.full((B,), fill_value=self.model.num_classes)
 
@@ -348,7 +347,7 @@ class Trainer:
             return u.reshape(B, LATENT_DIM)
 
         # Batch generator for FID
-        key = jax.random.PRNGKey(0)
+        key = jax.random.PRNGKey(seed)
         n_batches = num_samples // batch_size
 
         for _ in range(n_batches):
@@ -362,7 +361,7 @@ class Trainer:
                 batch_size,
                 self.trainingParams.embed_t_r,  # (t, r) embedding fn
                 n_steps=1,  # MeanFlow 1-NFE
-                c=None,
+                c=c,
             )
 
             latents = latents_flat.reshape(batch_size, *LATENT_SHAPE)

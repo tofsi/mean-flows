@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Tuple, Callable, Optional, Any, Dict
 import pickle
 from mean_flows import algorithm_1, algorithm_2
+from jtnn import Vocab, JTNNVAE
 
 class MoleculeLatentDataset:
     """
@@ -198,6 +199,88 @@ class MoleculeTrainer(Trainer):
                 metrics,
             )
         return params
+
+    def generate_samples(self, params, num_samples=1000, batch_size=128, seed=0, vocab_path="vae_qm9/qvae/data/merged/vocab.txt", model_path="vae_qm9/qvae/var_model/model.epoch-15"):
+        """
+        Generates decoded molecule images using:
+            - trained DiT params
+            - algorithm_2 sampler
+            - decode_latents 
+        Returns a Python generator that yields (B, LATENT_DIM) numpy batches.
+        """
+        # Wrapper around model.forward that algorithm_2 expects
+        def fn_wrapped(x_flat, tr, y=None):
+            """
+            x_flat: (B, LATENT_DIM)
+            t, r: scalar floats or arrays (B,)
+            y: class labels (B,) or None
+            """
+            B = x_flat.shape[0]
+            LATENT_DIM = x_flat.shape[1]
+            x = x_flat
+            #x = x_flat.reshape(B, *LATENT_SHAPE)
+
+            if y is None:
+                y = jnp.full((B,), fill_value=self.model.num_classes)
+
+            # DiT forward pass.
+            u = self.model.apply(
+                {"params": params},
+                x,
+                tr,
+                y,
+                train=False,
+                method=self.model.forward, 
+            )  # (B, LATENT_DIM) 
+            return u
+
+        # Batch generator
+        key = jax.random.PRNGKey(seed)
+        n_batches = num_samples // batch_size
+
+        for _ in range(n_batches):
+            key, sub = jax.random.split(key)
+
+            # mean-flow sample in latent space
+            latents_flat = algorithm_2(
+                fn_wrapped,
+                LATENT_DIM,
+                sub,
+                batch_size,
+                self.trainingParams.embed_t_r,  # (t, r) embedding fn
+                n_steps=1,  # MeanFlow 1-NFE
+                c=None,
+            ) # (batch_size, LATENT_DIM)
+            
+            # TODO: check if this is correct
+            latents = latents_flat.reshape(batch_size, (1, LATENT_DIM))
+
+            # decode to molecule (batch_size, 1, LATENT_DIM)
+            mol_torch = self.decode_latents(latents, vocab_path, model_path)
+
+            yield mol_torch
+
+
+    def decode_latents(latents, vocab_path, model_path):
+        """
+        decodes molecule latents using JTNNVAE decode()
+        """
+        vocab = Vocab([x.strip() for x in open(vocab_path)])
+        model = JTNNVAE(vocab, 450, 56, 3, stereo=True)
+        model.load_state_dict(torch.load(model_path))
+        model = model.cuda()
+        model.eval()
+        results = []
+        for i in range(latents.shape[0]):
+            latent = latents[i]
+            tree_vec = latent[:, :28]
+            mol_vec = latent[:, 28:]
+            result = model.decode(tree_vec, mol_vec, prob_decode=False)
+            print(f"result : {result} with shape : {result.shape}")
+            results.append(result)
+        return results
+        
+    
 
 
 if __name__ == "__main__":
