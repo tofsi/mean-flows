@@ -223,7 +223,7 @@ def algorithm_2(
         key: PRNGKey
         batch_size: int
         n_steps: int     number of Euler steps (1 = your original algorithm_2)
-        c : optional class. Note, for a class conditional model, the correct option for marginal sampling is *not* c = None but rather c = jnp.zeros(n_classes)
+        c : optional class. Note, for a class conditional model, the correct option for marginal sampling is *not* c = None but rather c = class_index
 
     Returns:
         x: (B, dim) final generated samples
