@@ -1,0 +1,64 @@
+ENCODER INPUT → DECODER OUTPUT
+============================================================
+
+Sample 1:
+  Input (original):  Cn1cc(NC(=O)N2CCCCCC2c2ccncc2)cn1
+  Latent vector:     shape=torch.Size([1, 56]), mean=0.140, std=1.649
+  Output (decoded):  Cn1cc(NC(=O)N2CCCCC[C@H]2c2ccncc2)cn1
+  Result:            ✗ DIFFERENT
+
+Sample 2:
+  Input (original):  Cc1nccc(NC(C)CCC[NH3+])n1
+  Latent vector:     shape=torch.Size([1, 56]), mean=-0.170, std=1.643
+  Output (decoded):  Cc1nccc(N[C@@H](C)CCC[NH3+])n1
+  Result:            ✗ DIFFERENT
+
+Sample 3:
+  Input (original):  O=S(=O)(c1ccc(Cl)cc1C(F)(F)F)N1CCCC(c2nc3ccccc3o2)C1
+  Latent vector:     shape=torch.Size([1, 56]), mean=0.131, std=1.548
+  Output (decoded):  O=S(=O)(c1ccccc1C(F)(F)F)N1CC2(CCCCC2)C[C@H]1c1ccccn1
+  Result:            ✗ DIFFERENT
+
+Sample 4:
+  Input (original):  Cc1cc(C)cc(OCn2ccc(C(=O)Nc3c(C(=O)N(C)C)nn(C)c3C)n2)c1
+  Latent vector:     shape=torch.Size([1, 56]), mean=-0.095, std=1.967
+  Output (decoded):  COc1nn(C)c(C)c1NC(=O)CN(C)C(=O)c1cc(C)n(-c2cc(C)ccc2C)n1
+  Result:            ✗ DIFFERENT
+
+Sample 5:
+  Input (original):  Cc1c(C(=O)NCc2ccc(CS(C)(=O)=O)cc2)cnn1C(C)C
+  Latent vector:     shape=torch.Size([1, 56]), mean=-0.162, std=1.428
+  Output (decoded):  Cc1c(C(=O)NCc2ccc(CS(C)(=O)=O)cc2)cnn1C(C)C
+  Result:            ✓ MATCH
+
+Sample 6:
+  Input (original):  O=C(c1cc2ccccc2o1)N1CCN(c2ccc([N+](=O)[O-])c(NCc3cccnc3)c2)CC1
+  Latent vector:     shape=torch.Size([1, 56]), mean=0.035, std=1.413
+  Output (decoded):  O=C(c1cccc(-n2cnnc2)c1)N1CCN(/C=C\c2ccc(O)c(F)c2)CC1
+  Result:            ✗ DIFFERENT
+
+Sample 7:
+  Input (original):  OCC#CC1CCC1
+  Latent vector:     shape=torch.Size([1, 56]), mean=-0.353, std=1.198
+  Output (decoded):  OCC#CC1CCC1
+  Result:            ✓ MATCH
+
+Sample 8:
+  Input (original):  CCOc1ccc2c(c1)sc(=NC(=O)C1CC1)n2C
+  Latent vector:     shape=torch.Size([1, 56]), mean=-0.159, std=1.413
+  Output (decoded):  CCOc1ccc2c(c1)s/c(=N\C(=O)C1CC1)n2C
+  Result:            ✗ DIFFERENT
+
+Sample 9:
+  Input (original):  CN(C)C(=O)c1ccc2c(c1)N(CC(=O)NCc1ccc3c(c1)OCO3)C(=O)C1CCCCN21
+  Latent vector:     shape=torch.Size([1, 56]), mean=0.015, std=1.985
+  Output (decoded):  CN(C)C(=O)c1ccc2c(c1)N(CC(=O)NCc1ccc3c(c1)OCO3)C(=O)[C@@H]1CCCCN21
+  Result:            ✗ DIFFERENT
+
+Sample 10:
+  Input (original):  CC(C)C12OC3C1NC32
+  Latent vector:     shape=torch.Size([1, 56]), mean=-0.042, std=1.392
+  Output (decoded):  CC(C)[C@@]12O[C@H]3[C@H]1N[C@@H]32
+  Result:            ✗ DIFFERENT
+
+Accuracy: 2/10 = 20%
