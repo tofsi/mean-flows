@@ -42,7 +42,7 @@ class MoleculeLatentDataset:
 
 class MoleculeTrainer(Trainer):
     trainingParams: TrainingParams
-    _batch_size = 128
+    _batch_size = 2**13
 
     def __init__(
         self,
@@ -203,7 +203,7 @@ class MoleculeTrainer(Trainer):
 if __name__ == "__main__":
     trainingParams = TrainingParams(
         architecture="Mol-DiT-B",
-        epochs=20,
+        epochs=150,
         lr=1e-4,
         beta1=0.9,
         beta2=0.95,
@@ -218,6 +218,6 @@ if __name__ == "__main__":
         time_sampler_params=None,
     )
 
-    latent_path = "vae_qm9/qvae/latent_vectors_sample.npz"
+    latent_path = "vae_qm9/qvae/all_latent_vectors.npz"
     trainer = MoleculeTrainer(trainingParams, latent_path)
     trained_params = trainer.train()
