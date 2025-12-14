@@ -36,7 +36,7 @@ ABLATIONS = {
             None,  # uniform
             (-0.2, 1.0),
             (-0.2, 1.2),
-            #(-0.4, 1.0),
+            (-0.4, 1.0),
             (-0.4, 1.2),
         ]
     },
@@ -54,7 +54,7 @@ ABLATIONS = {
         "omega": 1.5,
         "ratio_r_not_eq_t": 1.00,
         "jvp_tangent": "(v,0,1)",
-        "embed_t_r_name": "t_tr",
+        "embed_t_r_name": "tr_t_tr",
         # IMPORTANT: this key must exist
         # None => uniform, (mean,std) => lognorm(mean,std)
         "time_sampler_params": (-0.4, 1.2),
