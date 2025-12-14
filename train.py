@@ -332,7 +332,6 @@ class Trainer:
             x = x_flat.reshape(B, *LATENT_SHAPE)
 
             # If unconditional: use null class = num_classes
-            # TODO: Consistent unconditional convention. I think 0 should be used?
             if y is None:
                 y = jnp.full((B,), fill_value=self.model.num_classes)
 
