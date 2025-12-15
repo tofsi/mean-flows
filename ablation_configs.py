@@ -45,7 +45,7 @@ ABLATIONS = {
     "architecture" : {"values": ["DiT-B-2", "DiT-M-2", "DiT-L-2"]},
     "best": {
         "architecture": "DiT-B-4",
-        "epochs": 15, 
+        "epochs": 30, 
         "lr": 1e-4,
         "beta1": 0.9,
         "beta2": 0.95,
