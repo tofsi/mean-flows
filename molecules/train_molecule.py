@@ -18,7 +18,40 @@ from dataclasses import dataclass, field
 from typing import Tuple, Callable, Optional, Any, Dict
 import pickle
 from mean_flows import algorithm_1, algorithm_2
-from jtnn import Vocab, JTNNVAE
+from vae_qm9.jtnn import Vocab, JTNNVAE
+import torch
+
+
+LATENT_DIM = 56
+
+def to_torch(x, device="cuda", dtype=torch.float32):
+    # Accepts JAX array / NumPy array / Python list / Torch tensor
+    if isinstance(x, torch.Tensor):
+        return x.to(device=device, dtype=dtype)
+    # JAX arrays implement __array__ -> convert via NumPy
+    x_np = np.asarray(x)
+    return torch.from_numpy(x_np).to(device=device, dtype=dtype)
+
+def decode_latents(latents, vocab_path, model_path):
+    """
+    decodes molecule latents using JTNNVAE decode()
+    """
+    vocab = Vocab([x.strip() for x in open(vocab_path)])
+    model = JTNNVAE(vocab, 450, LATENT_DIM, 3, stereo=True)
+    model.load_state_dict(torch.load(model_path))
+    model = model.cuda()
+    model.eval()
+    results = []
+    for i in range(latents.shape[0]):
+        latent = latents[i]
+        tree_vec = latent[:, :28]
+        mol_vec = latent[:, 28:]
+        tree_vec = to_torch(tree_vec, device="cuda")
+        mol_vec  = to_torch(mol_vec,  device="cuda")
+        result = model.decode(tree_vec, mol_vec, prob_decode=False)
+        print(f"result : {result}")
+        results.append(result)
+    return results
 
 class MoleculeLatentDataset:
     """
@@ -36,7 +69,7 @@ class MoleculeLatentDataset:
         indices = np.random.permutation(N)
         for start in range(0, N, self.batch_size):
             idx = indices[start : start + self.batch_size]
-            x = self.latents[idx]  # (B, 56)
+            x = self.latents[idx]  # (B, LATENT_DIM)
             y = np.zeros(x.shape[0], dtype=np.int32)  # dummy labels, unused
             yield x, y
 
@@ -105,7 +138,7 @@ class MoleculeTrainer(Trainer):
                 print(f"[MoleculeTrainer][Warning] Failed to restore state from {self.checkpoint_dir}")
         if start_from_scratch:
             key, key_params = jax.random.split(key)
-            dummy_x = jnp.zeros((1, 56), dtype=jnp.float32)
+            dummy_x = jnp.zeros((1, LATENT_DIM), dtype=jnp.float32)
             dummy_t = jnp.ones((1,), dtype=jnp.float32)
             dummy_r = jnp.ones((1,), dtype=jnp.float32)
             dummy_tr = self.trainingParams.embed_t_r(dummy_t, dummy_r)
@@ -128,7 +161,7 @@ class MoleculeTrainer(Trainer):
             epoch_losses = []
 
             for batch_idx, (latents_np, labels_np) in enumerate(train_loader):
-                # latents_np: (B, 56), labels_np are dummy zeros
+                # latents_np: (B, LATENT_DIM), labels_np are dummy zeros
                 x = jnp.array(latents_np, dtype=jnp.float32)
                 y = jnp.array(labels_np, dtype=jnp.int32)  # ignored by MoleculeDiT
                 key, subkey = jax.random.split(key, 2)
@@ -253,32 +286,15 @@ class MoleculeTrainer(Trainer):
             ) # (batch_size, LATENT_DIM)
             
             # TODO: check if this is correct
-            latents = latents_flat.reshape(batch_size, (1, LATENT_DIM))
+            latents = latents_flat.reshape(batch_size, 1, LATENT_DIM)
 
             # decode to molecule (batch_size, 1, LATENT_DIM)
-            mol_torch = self.decode_latents(latents, vocab_path, model_path)
+            mol_torch = decode_latents(latents, vocab_path, model_path)
 
             yield mol_torch
 
 
-    def decode_latents(latents, vocab_path, model_path):
-        """
-        decodes molecule latents using JTNNVAE decode()
-        """
-        vocab = Vocab([x.strip() for x in open(vocab_path)])
-        model = JTNNVAE(vocab, 450, 56, 3, stereo=True)
-        model.load_state_dict(torch.load(model_path))
-        model = model.cuda()
-        model.eval()
-        results = []
-        for i in range(latents.shape[0]):
-            latent = latents[i]
-            tree_vec = latent[:, :28]
-            mol_vec = latent[:, 28:]
-            result = model.decode(tree_vec, mol_vec, prob_decode=False)
-            print(f"result : {result} with shape : {result.shape}")
-            results.append(result)
-        return results
+    
         
     
 
@@ -294,7 +310,7 @@ if __name__ == "__main__":
         p=0.0,
         omega=None,  # 1.0,
         ratio_r_not_eq_t=0.25,
-        jvp_computation=(False, False),
+        jvp_computation=(False, True),
         embed_t_r_name="tr",
         embed_t_r=lambda t, r: (t, t - r),
         time_embed_dim=256,
