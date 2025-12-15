@@ -55,23 +55,27 @@ def decode_latents(latents, vocab_path, model_path):
 
 class MoleculeLatentDataset:
     """
-    Simple iterable that yields (latent_batch, dummy_label_batch) for molecule training.
-    Labels are dummy zeros and are ignored by MoleculeDiT.
+    Iterable that yields (latent_batch, dummy_label_batch).
+    Supports indexing into a subset via `indices`.
     """
 
-    def __init__(self, latents: np.ndarray, batch_size: int):
+    def __init__(self, latents: np.ndarray, indices: np.ndarray, batch_size: int, shuffle: bool = True):
         assert latents.ndim == 2, "Expected (N, latent_dim) array of latents"
-        self.latents = latents.astype(np.float32)
+        self.latents = latents                # keep original (can be memmap)
+        self.indices = np.array(indices)      # subset indices
         self.batch_size = batch_size
+        self.shuffle = shuffle
 
     def __iter__(self):
-        N = self.latents.shape[0]
-        indices = np.random.permutation(N)
-        for start in range(0, N, self.batch_size):
-            idx = indices[start : start + self.batch_size]
-            x = self.latents[idx]  # (B, LATENT_DIM)
-            y = np.zeros(x.shape[0], dtype=np.int32)  # dummy labels, unused
-            yield x, y
+        idxs = self.indices.copy()
+        if self.shuffle:
+            np.random.shuffle(idxs)
+
+        for start in range(0, len(idxs), self.batch_size):
+            batch_idx = idxs[start:start + self.batch_size]
+            x = self.latents[batch_idx]  # (B, 56)
+            y = np.zeros(x.shape[0], dtype=np.int32)  # dummy labels (ignored)
+            yield x.astype(np.float32, copy=False), y
 
 
 class MoleculeTrainer(Trainer):
@@ -106,16 +110,31 @@ class MoleculeTrainer(Trainer):
                 rngs={"dropout": rng},
             )
 
-        self.fn_apply = fn_apply
-
+        self.fn_apply_train = fn_apply
+        def fn_apply_eval(vars, x, tr, y):
+            return self.model.apply(
+                vars, x, tr, y,
+                train=False,
+                method=self.model.forward,
+            )
+        self.fn_apply_eval = fn_apply_eval
         latent_npz = np.load(self.latent_path, allow_pickle=True)
         self.molecule_latents = latent_npz["latent_vectors"]
+
+        N = self.molecule_latents.shape[0]
+        rng = np.random.default_rng(42)
+        perm = rng.permutation(N)
+
+        n_train = int(0.9 * N)
+        self.train_idx = perm[:n_train]
+        self.val_idx = perm[n_train:]
 
     def train(self):
         """Main training loop for molecule latents."""
         # 1. Build training loop for molecule latents.
 
-        train_loader = MoleculeLatentDataset(self.molecule_latents, self._batch_size)
+        train_loader = MoleculeLatentDataset(self.molecule_latents, self.train_idx, self._batch_size, shuffle=True)
+        val_loader   = MoleculeLatentDataset(self.molecule_latents, self.val_idx,   self._batch_size, shuffle=False)
 
         # 2. Init or restore params
         key = jax.random.PRNGKey(42)
@@ -171,7 +190,7 @@ class MoleculeTrainer(Trainer):
                     subkey, dropout_key = jax.random.split(key, 2)
 
                     def fn_for_algo1(vars_dict, x, tr):
-                        return self.fn_apply(vars_dict, x, tr, y, dropout_key)
+                        return self.fn_apply_train(vars_dict, x, tr, y, dropout_key)
 
                     loss, grads = jax.value_and_grad(algorithm_1, argnums=1)(
                         fn_for_algo1,
@@ -191,6 +210,7 @@ class MoleculeTrainer(Trainer):
                     return loss, grads
                 
 
+
                 loss, grads = compute_loss_and_grads(params, x, y, subkey)
                 updates, opt_state = optimizer.update(grads, opt_state)
                 params = optax.apply_updates(params, updates)
@@ -207,7 +227,42 @@ class MoleculeTrainer(Trainer):
                         f"[MoleculeTrainer] Epoch {epoch}, Batch {batch_idx}, "
                         f"Loss: {loss}, Grad norm: {grad_norm:.6f}"
                     )
+            # Ugly fct for validation loss.
+            @jax.jit
+            def compute_loss_only(params, x, y, key):
+                subkey, _dropout_key = jax.random.split(key, 2)
 
+                def fn_for_algo1(vars_dict, x, tr):
+                    # eval: train=False, no dropout rng
+                    return self.fn_apply_eval(vars_dict, x, tr, y)
+
+                loss = algorithm_1(
+                    fn_for_algo1,
+                    params,
+                    x,
+                    y,
+                    subkey,
+                    self.trainingParams.ratio_r_not_eq_t,
+                    self.trainingParams.time_sampler_name,
+                    self.trainingParams.time_sampler_params,
+                    self.trainingParams.p,
+                    self.trainingParams.omega,
+                    self.model.num_classes,
+                    self.trainingParams.embed_t_r,
+                    self.trainingParams.jvp_computation,
+                )
+                return loss
+            # ---- validation loss ----
+            val_losses = []
+            for val_latents_np, val_labels_np in val_loader:
+                x_val = jnp.array(val_latents_np, dtype=jnp.float32)
+                y_val = jnp.array(val_labels_np, dtype=jnp.int32)
+
+                key, vkey = jax.random.split(key, 2)
+                vloss = compute_loss_only(params, x_val, y_val, vkey)
+                val_losses.append(float(vloss))
+
+            mean_val_loss = float(np.mean(val_losses)) if len(val_losses) > 0 else float("nan")
             mean_loss = float(np.mean(epoch_losses))
             epoch_time = time.time() - t0
             print(
@@ -224,6 +279,7 @@ class MoleculeTrainer(Trainer):
                 "epoch": epoch,
                 "global_step": global_step,
                 "mean_loss": mean_loss,
+                "mean_val_loss" : mean_val_loss,
                 "epoch_time_sec": epoch_time,
             }
             self.save_checkpoint_and_metrics(
