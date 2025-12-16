@@ -2,7 +2,8 @@ import numpy as np
 import sys
 
 sys.path.append("../..")
-from molecule_DiT import MoleculeDiT_B
+from molecule_DiT import MoleculeDiT_B, MoleculeDiT_M
+            
 from train import Trainer, TrainingParams
 import os
 
@@ -96,6 +97,8 @@ class MoleculeTrainer(Trainer):
         arch = trainingParams.architecture
         if arch == "Mol-DiT-B":
             self.model = MoleculeDiT_B()
+        elif arch == "Mol-DiT-M":
+            self.model = MoleculeDiT_M()
         else:
             raise ValueError(f"Unsupported molecule architecture: {arch}")
 
@@ -122,7 +125,7 @@ class MoleculeTrainer(Trainer):
         self.molecule_latents = latent_npz["latent_vectors"]
 
         N = self.molecule_latents.shape[0]
-        rng = np.random.default_rng(42)
+        rng = np.random.default_rng(2)
         perm = rng.permutation(N)
 
         n_train = int(0.9 * N)
@@ -227,7 +230,7 @@ class MoleculeTrainer(Trainer):
                         f"[MoleculeTrainer] Epoch {epoch}, Batch {batch_idx}, "
                         f"Loss: {loss}, Grad norm: {grad_norm:.6f}"
                     )
-            # Ugly fct for validation loss.
+            # Ugl fct for validation loss.
             @jax.jit
             def compute_loss_only(params, x, y, key):
                 subkey, _dropout_key = jax.random.split(key, 2)
@@ -289,7 +292,7 @@ class MoleculeTrainer(Trainer):
             )
         return params
 
-    def generate_samples(self, params, num_samples=1000, batch_size=128, seed=0, vocab_path="vae_qm9/qvae/data/merged/vocab.txt", model_path="vae_qm9/qvae/var_model/model.epoch-15"):
+    def generate_samples(self, params, num_samples=1000, batch_size=128, seed=100, vocab_path="vae_qm9/qvae/data/merged/vocab.txt", model_path="vae_qm9/qvae/var_model/model.epoch-15"):
         """
         Generates decoded molecule images using:
             - trained DiT params
@@ -340,14 +343,44 @@ class MoleculeTrainer(Trainer):
                 n_steps=1,  # MeanFlow 1-NFE
                 c=None,
             ) # (batch_size, LATENT_DIM)
-            
-            # TODO: check if this is correct
+
             latents = latents_flat.reshape(batch_size, 1, LATENT_DIM)
 
             # decode to molecule (batch_size, 1, LATENT_DIM)
             mol_torch = decode_latents(latents, vocab_path, model_path)
 
             yield mol_torch
+    
+    def generate_samples_from_prior(
+        self,
+        num_samples=1000,
+        batch_size=128,
+        seed=1,
+        vocab_path="vae_qm9/qvae/data/merged/vocab.txt",
+        model_path="vae_qm9/qvae/var_model/model.epoch-15",
+    ):
+        """
+        Samples z ~ N(0, I) in latent space and decodes with JTNNVAE.
+        Returns a Python generator that yields decoded SMILES (list length B).
+        """
+        rng = np.random.default_rng(seed)
+
+        n_full = num_samples // batch_size
+        remainder = num_samples % batch_size
+
+        def _sample_and_decode(B):
+            # z: (B, LATENT_DIM) ~ N(0, I)
+            z_flat = rng.standard_normal(size=(B, LATENT_DIM)).astype(np.float32)
+            # decoder expects: (B, 1, LATENT_DIM)
+            z = z_flat.reshape(B, 1, LATENT_DIM)
+            mol = decode_latents(z, vocab_path, model_path)
+            return mol
+
+        for _ in range(n_full):
+            yield _sample_and_decode(batch_size)
+
+        if remainder > 0:
+            yield _sample_and_decode(remainder)
 
 
     
@@ -358,21 +391,20 @@ class MoleculeTrainer(Trainer):
 if __name__ == "__main__":
     trainingParams = TrainingParams(
         architecture="Mol-DiT-B",
-        epochs=150,
-        lr=1e-4,
-        beta1=0.9,
-        beta2=0.95,
-        ema_decay=0.9999,
-        p=0.0,
-        omega=None,  # 1.0,
-        ratio_r_not_eq_t=0.25,
-        jvp_computation=(False, True),
-        embed_t_r_name="tr",
-        embed_t_r=lambda t, r: (t, t - r),
-        time_embed_dim=256,
-        time_sampler_params=None,
-    )
+        epochs= 150,
+        lr = 1e-4,
+        beta1= 0.9,
+        beta2= 0.95,
+        ema_decay= 0.9999,
+        p = 0.0,
+        omega =  None,
+        ratio_r_not_eq_t = 0.5,
+        jvp_computation =  (False, True),
+        embed_t_r_name =  "tr",
+        embed_t_r= lambda t, r : (t, t - r),
+        time_embed_dim=2,
+        time_sampler_params = (-0.4, 1.2))
 
     latent_path = "vae_qm9/qvae/all_latent_vectors.npz"
-    trainer = MoleculeTrainer(trainingParams, latent_path)
+    trainer = MoleculeTrainer(trainingParams, latent_path, checkpoint_dir="checkpoints_mol")
     trained_params = trainer.train()

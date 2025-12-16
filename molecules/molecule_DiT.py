@@ -197,10 +197,23 @@ class MoleculeDiT(nn.Module):
 
 def MoleculeDiT_B():
     """
-    "Base" size Molecule DiT for 56-dim JTNNVAE latents.
+    "Small" size Molecule DiT for 56-dim JTNNVAE latents.
     """
     return MoleculeDiT(
         depth=8,
+        hidden_dim=512,
+        num_heads=8,
+        latent_dim=56,
+        n_tokens=2,
+        num_classes=1,  # unused
+    )
+
+def MoleculeDiT_M():
+    """
+    "Medium" size Molecule DiT for 56-dim JTNNVAE latents.
+    """
+    return MoleculeDiT(
+        depth=16,
         hidden_dim=512,
         num_heads=8,
         latent_dim=56,
