@@ -7,6 +7,7 @@ imagenet/downloads
 imagenet/downloads/imagenet_val_raw
 runs
 data
-# checkpoints_mol*
+checkpoints_mol*
+molecules/results
 figures
 !molecules/vae_qm9/qvae/data
